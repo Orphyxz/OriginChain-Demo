@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>OriginChain Blockchain Product Authentication Demo</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="top">
+        <div>
+          <h1>OriginChain</h1>
+          <p>Blockchain Product Authentication Demo</p>
+        </div>
+        <div class="status-bar" aria-live="polite">
+          <span>Blockchain: <strong id="chainStatus">Checking</strong></span>
+          <span>Network: <strong id="networkName">-</strong></span>
+          <span>Contract: <strong id="contractAddress">-</strong></span>
+          <span>Current Block: <strong id="currentBlock">-</strong></span>
+        </div>
+      </header>
+
+      <div id="errorBox" class="notice error hidden" role="alert"></div>
+
+      <section class="panel product-panel">
+        <div class="section-head">
+          <div>
+            <span class="step">1</span>
+            <h2>Product Registration</h2>
+          </div>
+          <span class="module-tag ready">Solidity + FastAPI</span>
+        </div>
+
+        <form id="registrationForm" class="form-grid">
+          <label>
+            Product Code
+            <input id="productCode" name="product_code" value="OC-DEMO-0001" autocomplete="off">
+          </label>
+          <label>
+            Product Name
+            <input id="productName" name="name" value="OriginChain Demo Sneakers" autocomplete="off">
+          </label>
+          <label>
+            Brand
+            <input id="brand" name="brand" value="Origin Labs" autocomplete="off">
+          </label>
+          <label>
+            Batch Number
+            <input id="batchNumber" name="batch_number" value="B001" autocomplete="off">
+          </label>
+          <label class="wide">
+            Description
+            <textarea id="description" name="description" rows="3">Blockchain authentication demo</textarea>
+          </label>
+          <div class="actions wide">
+            <button id="registerButton" type="submit">Register On Blockchain</button>
+          </div>
+        </form>
+
+        <div id="registrationResult" class="result-box hidden"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <span class="step">2</span>
+            <h2>Supply Chain Ownership</h2>
+          </div>
+        </div>
+
+        <div id="supplyTimeline" class="chain-timeline">
+          <div class="chain-node" data-role="MANUFACTURER">
+            <strong>Manufacturer</strong>
+            <span id="walletManufacturer">-</span>
+          </div>
+          <div class="chain-arrow">↓</div>
+          <div class="chain-node" data-role="DISTRIBUTOR">
+            <strong>Distributor</strong>
+            <span id="walletDistributor">-</span>
+          </div>
+          <div class="chain-arrow">↓</div>
+          <div class="chain-node" data-role="RETAILER">
+            <strong>Retailer</strong>
+            <span id="walletRetailer">-</span>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="transferDistributorButton" class="hidden" type="button">Transfer To Distributor</button>
+          <button id="transferRetailerButton" class="hidden" type="button">Transfer To Retailer</button>
+        </div>
+        <div id="transferLog" class="transfer-log"></div>
+      </section>
+
+      <section class="panel split">
+        <div>
+          <div class="section-head">
+            <div>
+              <span class="step">3</span>
+              <h2>QR / Product Code</h2>
+            </div>
+          </div>
+          <div class="qr-wrap">
+            <img id="qrImage" alt="QR code for OC-DEMO-0001" src="/api/qr/OC-DEMO-0001">
+            <code id="qrCodeText">OC-DEMO-0001</code>
+          </div>
+        </div>
+
+        <div>
+          <div class="section-head">
+            <div>
+              <span class="step">4</span>
+              <h2>Consumer Verification</h2>
+            </div>
+          </div>
+          <form id="verifyForm" class="verify-form">
+            <label>
+              Product code
+              <input id="verifyCode" value="OC-DEMO-0001" autocomplete="off">
+            </label>
+            <button id="verifyButton" type="submit">Verify Product</button>
+          </form>
+          <div id="verificationResult" class="verification empty">
+            Run verification after registration and transfers.
+          </div>
+        </div>
+      </section>
+
+      <section class="panel support-panel">
+        <div class="tamper">
+          <div>
+            <span class="step">5</span>
+            <h2>Blockchain Integrity Demonstration</h2>
+            <p>Changes one off-chain product field without modifying the immutable blockchain record.</p>
+          </div>
+          <div class="actions">
+            <button id="tamperButton" type="button">Simulate Database Tampering</button>
+            <button id="resetButton" class="secondary" type="button">Reset Demo</button>
+          </div>
+        </div>
+        <div id="tamperResult" class="muted"></div>
+      </section>
+
+      <section class="module-strip" aria-label="Planned modules">
+        <div>
+          <strong>AI Packaging Inspection</strong>
+          <span>Planned Module</span>
+        </div>
+        <div>
+          <strong>Scan Anomaly Detection</strong>
+          <span>Planned Module</span>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
