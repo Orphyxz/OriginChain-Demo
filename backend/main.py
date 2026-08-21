@@ -41,6 +41,33 @@ def create_app(
     @app.on_event("startup")
     def startup() -> None:
         app.state.repository.init_db()
+        try:
+            logo_src = Path(r"C:\Users\Aradhya\.gemini\antigravity-ide\brain\b5d91d5b-2b5a-4763-997e-bc0f0bc2dba6\media__1787255802284.jpg")
+            logo_dst = STATIC_DIR / "logo.png"
+            if logo_src.exists():
+                from PIL import Image
+                img = Image.open(logo_src).convert("RGBA")
+                datas = img.getdata()
+                new_data = []
+                for r, g, b, a in datas:
+                    if r < 20 and g < 20 and b < 20:
+                        new_data.append((0, 0, 0, 0))
+                    else:
+                        new_data.append((r, g, b, a))
+                img.putdata(new_data)
+                bbox = img.getbbox()
+                if bbox:
+                    pad = 12
+                    w_img, h_img = img.size
+                    crop_box = (max(0, bbox[0]-pad), max(0, bbox[1]-pad), min(w_img, bbox[2]+pad), min(h_img, bbox[3]+pad))
+                    img = img.crop(crop_box)
+                    w, h = img.size
+                    max_dim = max(w, h)
+                    sq = Image.new("RGBA", (max_dim, max_dim), (0, 0, 0, 0))
+                    sq.paste(img, ((max_dim - w) // 2, (max_dim - h) // 2))
+                    sq.save(logo_dst, "PNG")
+        except Exception:
+            pass
 
     @app.get("/")
     def index() -> FileResponse:
