@@ -3,157 +3,208 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>OriginChain Blockchain Product Authentication</title>
+    <title>OriginChain — Luxury Cosmetics Quality Journey</title>
     <link rel="stylesheet" href="/static/styles.css">
   </head>
   <body>
-    <main class="shell">
-      <header class="top">
-        <div>
-          <h1>OriginChain</h1>
-          <p>Blockchain Product Authentication</p>
+    <header class="masthead">
+      <a class="brand" href="#access" aria-label="OriginChain home">
+        <img src="/static/logo.svg" alt="">
+        <span><strong>ORIGINCHAIN</strong><small>Luxury Cosmetics Assurance</small></span>
+      </a>
+      <nav id="primaryNav" aria-label="Primary navigation">
+        <a class="operational-nav hidden" href="#dashboard">Overview</a>
+        <a class="operational-nav hidden" data-nav-role="materials" href="#materials">Raw Materials</a>
+        <a class="operational-nav hidden" data-nav-role="manufacturing" href="#manufacturing">Manufacturing</a>
+        <a class="operational-nav hidden" data-nav-role="operations" href="#operations">Quality Operations</a>
+        <a class="admin-nav hidden" href="#admin">Audit & Demo</a>
+        <a href="#consumer">Verify Product</a>
+      </nav>
+      <div class="header-actions">
+        <div id="chainPill" class="chain-pill"><span></span> Connecting</div>
+        <div id="accountPanel" class="account-panel hidden">
+          <div><strong id="accountName"></strong><small id="accountOrganization"></small><span id="accountRole" class="role-badge"></span></div>
+          <button id="logoutButton" class="quiet" type="button">Sign Out</button>
         </div>
-        <div class="status-bar" aria-live="polite">
-          <span>Blockchain: <strong id="chainStatus">Checking</strong></span>
-          <span>Network: <strong id="networkName">-</strong></span>
-          <span>Contract: <strong id="contractAddress">-</strong></span>
-          <span>Current Block: <strong id="currentBlock">-</strong></span>
+      </div>
+    </header>
+
+    <main>
+      <div id="notice" class="notice hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+      <section id="access" class="auth-section">
+        <div class="auth-copy">
+          <div class="eyebrow">OriginChain · Local educational demo</div>
+          <h1>Luxury cosmetics<br>quality & traceability.</h1>
+          <p>Operational actors sign in to perform their assigned supply-chain responsibilities. Consumer verification remains public and read only.</p>
+          <a class="public-verify-link" href="#consumer">Verify a Product without signing in</a>
         </div>
-      </header>
-
-      <div id="errorBox" class="notice error hidden" role="alert"></div>
-
-      <section class="panel product-panel">
-        <div class="section-head">
-          <div>
-            <span class="step">1</span>
-            <h2>Product Registration</h2>
-          </div>
-          <span class="module-tag ready">Solidity + FastAPI</span>
-        </div>
-
-        <form id="registrationForm" class="form-grid">
-          <label>
-            Product Code
-            <input id="productCode" name="product_code" value="OC-DEMO-0001" autocomplete="off">
-          </label>
-          <label>
-            Product Name
-            <input id="productName" name="name" value="OriginChain Demo Sneakers" autocomplete="off">
-          </label>
-          <label>
-            Brand
-            <input id="brand" name="brand" value="Origin Labs" autocomplete="off">
-          </label>
-          <label>
-            Batch Number
-            <input id="batchNumber" name="batch_number" value="B001" autocomplete="off">
-          </label>
-          <label class="wide">
-            Description
-            <textarea id="description" name="description" rows="3">Blockchain authentication demo</textarea>
-          </label>
-          <div class="actions wide">
-            <button id="registerButton" type="submit">Register On Blockchain</button>
-          </div>
-        </form>
-
-        <div id="registrationResult" class="result-box hidden"></div>
-      </section>
-
-      <section class="panel">
-        <div class="section-head">
-          <div>
-            <span class="step">2</span>
-            <h2>Supply Chain Ownership</h2>
-          </div>
-        </div>
-
-        <div id="supplyTimeline" class="chain-timeline">
-          <div class="chain-node" data-role="MANUFACTURER">
-            <strong>Manufacturer</strong>
-            <span id="walletManufacturer">-</span>
-          </div>
-          <div class="chain-arrow">↓</div>
-          <div class="chain-node" data-role="DISTRIBUTOR">
-            <strong>Distributor</strong>
-            <span id="walletDistributor">-</span>
-          </div>
-          <div class="chain-arrow">↓</div>
-          <div class="chain-node" data-role="RETAILER">
-            <strong>Retailer</strong>
-            <span id="walletRetailer">-</span>
-          </div>
-        </div>
-
-        <div class="actions">
-          <button id="transferDistributorButton" class="hidden" type="button">Transfer To Distributor</button>
-          <button id="transferRetailerButton" class="hidden" type="button">Transfer To Retailer</button>
-        </div>
-        <div id="transferLog" class="transfer-log"></div>
-      </section>
-
-      <section class="panel split">
-        <div>
-          <div class="section-head">
-            <div>
-              <span class="step">3</span>
-              <h2>QR / Product Code</h2>
-            </div>
-          </div>
-          <div class="qr-wrap">
-            <img id="qrImage" alt="QR code for OC-DEMO-0001" src="/api/qr/OC-DEMO-0001">
-            <code id="qrCodeText">OC-DEMO-0001</code>
-          </div>
-        </div>
-
-        <div>
-          <div class="section-head">
-            <div>
-              <span class="step">4</span>
-              <h2>Consumer Verification</h2>
-            </div>
-          </div>
-          <form id="verifyForm" class="verify-form">
-            <label>
-              Product code
-              <input id="verifyCode" value="OC-DEMO-0001" autocomplete="off">
-            </label>
-            <button id="verifyButton" type="submit">Verify Product</button>
+        <div class="login-card">
+          <span class="seal">OC</span>
+          <h2>Operational Sign In</h2>
+          <p>Use a controlled fictional account for this local demonstration.</p>
+          <form id="loginForm" class="login-form">
+            <label for="loginUsername">Username<input id="loginUsername" name="username" autocomplete="username" required></label>
+            <label for="loginPassword">Password<input id="loginPassword" name="password" type="password" autocomplete="current-password" required></label>
+            <button id="loginButton" type="submit">Sign In</button>
           </form>
-          <div id="verificationResult" class="verification empty">
-            Run verification after registration and transfers.
+          <div class="demo-accounts">
+            <small>Demo Accounts · fills username only</small>
+            <div>
+              <button type="button" class="demo-account quiet" data-username="supplier">Supplier</button>
+              <button type="button" class="demo-account quiet" data-username="manufacturer">Manufacturer</button>
+              <button type="button" class="demo-account quiet" data-username="distributor">Distributor</button>
+              <button type="button" class="demo-account quiet" data-username="retailer">Retailer</button>
+              <button type="button" class="demo-account quiet" data-username="admin">Admin</button>
+            </div>
           </div>
+          <p class="auth-disclaimer">Local demo credentials only. This is not production identity management.</p>
         </div>
       </section>
 
-      <section class="panel support-panel">
-        <div class="tamper">
-          <div>
-            <span class="step">5</span>
-            <h2>Blockchain Integrity Demonstration</h2>
-            <p>Changes one off-chain product field without modifying the immutable blockchain record.</p>
-          </div>
-          <div class="actions">
-            <button id="tamperButton" type="button">Simulate Database Tampering</button>
-            <button id="resetButton" class="secondary" type="button">Reset Demo</button>
-          </div>
+      <div id="operationalApp" hidden>
+      <section id="dashboard" class="hero">
+        <div class="eyebrow">Aurelia Maison · Fictional demonstration</div>
+        <h1>Provenance, quality and trust<br>for every precious drop.</h1>
+        <p>Stage-based quality assurance for the flagship <strong>Aurelia Prestige Renewal Serum</strong>, from ingredient receipt to final retail approval.</p>
+        <div id="overviewSummary" class="overview-summary" aria-live="polite">
+          <div><small>Product batch</small><strong id="overviewBatch">Not registered</strong><span id="overviewProduct">Aurelia Prestige Renewal Serum</span></div>
+          <div><small>Current stage</small><strong id="overviewStage">Raw Materials</strong><span id="overviewNext">Register the first supplier batch</span></div>
+          <div><small>Overall quality</small><strong id="overviewQuality">0 of 4 approved</strong><span id="overviewIssues">Workflow not started</span></div>
+          <div><small>Final status</small><strong id="overviewSale" class="display-status">Not Ready</strong><span>Retailer is the final quality gate</span></div>
         </div>
-        <div id="tamperResult" class="muted"></div>
+        <div class="hero-network">
+          <small>Local demonstration network</small> <b id="networkName">Checking…</b>
+        </div>
       </section>
 
-      <section class="module-strip" aria-label="Planned modules">
-        <div>
-          <strong>AI Packaging Inspection</strong>
-          <span>Planned Module</span>
+      <section class="section">
+        <div class="section-title"><div><span>Quality journey</span><h2>Supply-chain readiness</h2></div><button id="refreshDashboard" class="quiet">Refresh</button></div>
+        <div id="journey" class="journey" aria-live="polite"></div>
+      </section>
+
+      <section id="materials" class="section two-column">
+        <div id="materialRegistrationPanel">
+          <div class="section-title"><div><span>Stage 01</span><h2>Raw-material registration</h2></div></div>
+          <p class="intro">Register a supplier batch before it can be considered for serum production. All data shown is fictional.</p>
+          <form id="materialForm" class="form-grid">
+            <label>Internal batch ID<input name="internal_batch_id" value="HA-260801" required></label>
+            <label>Material name<input name="material_name" value="Hyaluronic Acid Solution" required></label>
+            <label>Category<select name="material_category"><option>ACTIVE_INGREDIENT</option><option>BASE_INGREDIENT</option><option>PACKAGING_COMPONENT</option></select></label>
+            <label>Supplier<input name="supplier_name" value="Lumina Actives" required></label>
+            <label>Supplier lot<input name="supplier_lot_number" value="LUM-HA-801" required></label>
+            <label>Quantity<input name="quantity" type="number" min="0.01" step="0.01" value="25" required></label>
+            <label>Unit<input name="unit" value="kg" required></label>
+            <label>Received date<input name="received_date" type="date" value="2026-08-12" required></label>
+            <label>Expiry / retest date<input name="expiry_retest_date" type="date" value="2027-08-01"></label>
+            <label>Country/source<input name="country_source" value="Demo Origin"></label>
+            <label class="span-2">Notes<textarea name="notes">Fictional material for the OriginChain university demonstration.</textarea></label>
+            <button id="registerMaterialButton" type="submit">Register material batch</button>
+          </form>
         </div>
-        <div>
-          <strong>Scan Anomaly Detection</strong>
-          <span>Planned Module</span>
+        <aside>
+          <div class="section-title compact"><div><span>Registered inputs</span><h2>Material batches</h2></div></div>
+          <div id="materialList" class="record-list empty-state">No raw-material batches yet. Register the first material batch to begin the serum supply-chain workflow.</div>
+        </aside>
+      </section>
+
+      <section id="manufacturing" class="section two-column reverse">
+        <aside class="product-story">
+          <span class="monogram">AP</span>
+          <p>Flagship demonstration</p>
+          <h2>Aurelia Prestige<br>Renewal Serum</h2>
+          <dl><div><dt>Category</dt><dd>Luxury Skincare</dd></div><div><dt>Type</dt><dd>Anti-Aging Facial Serum</dd></div><div><dt>Batch</dt><dd>APR-2026-001</dd></div></dl>
+        </aside>
+        <div id="productRegistrationPanel">
+          <div class="section-title"><div><span>Stage 02</span><h2 id="productSectionHeading">Create the finished batch</h2></div></div>
+          <p id="productSectionIntro" class="intro">Only approved raw-material batches can be linked. The resulting lineage receives a deterministic integrity commitment.</p>
+          <form id="productForm" class="form-grid">
+            <label>Product code<input name="product_code" value="OC-LUX-SERUM-0001" required></label>
+            <label>Batch number<input name="batch_number" value="APR-2026-001" required></label>
+            <label class="span-2">Product specification<select id="specificationSelect" name="specification_code" required><option value="">Loading approved specifications…</option></select></label>
+            <label>Manufactured date<input name="manufactured_date" type="date" value="2026-08-20"></label>
+            <label>Expiry date<input name="expiry_date" type="date" value="2028-08-20"></label>
+            <label class="span-2">Approved materials<div id="materialChoices" class="choices">Register and approve a material first.</div></label>
+            <button id="registerProductButton" type="submit" disabled>Register batch on blockchain</button>
+          </form>
+          <div id="manufacturerSpecification" class="specification-card empty-state">Loading the applicable product specification…</div>
+          <div id="productResult" class="result muted">No finished batch registered in this local session.</div>
+        </div>
+      </section>
+
+      <section id="operations" class="section">
+        <div class="section-title"><div><span>Operational controls</span><h2>Quality standards and stage gates</h2></div></div>
+        <p class="intro">Select a stage to render its categories and checks from reusable backend templates. Required failed, pending or undocumented checks block approval and transfer.</p>
+        <div class="standards-disclaimer"><strong>Evidence traceability, not certification.</strong> Source mappings explain why evidence may be relevant to this India-focused demonstration. They do not establish legal compliance, laboratory validity, regulatory approval, or market authorization.</div>
+        <div class="stage-tabs">
+          <button data-stage="RAW_MATERIAL_SUPPLIER" class="quiet">Raw Material QC</button>
+          <button data-stage="MANUFACTURER" class="quiet">Manufacturing QC</button>
+          <button data-stage="DISTRIBUTOR" class="quiet">Distribution QC</button>
+          <button data-stage="RETAILER" class="quiet">Retail QC</button>
+        </div>
+        <div id="qualityContext" class="context-line">Select a registered material or product stage.</div>
+        <div id="qualitySummary" class="quality-summary empty-state" aria-live="polite">Register or select a batch before performing quality checks.</div>
+        <div id="blockingPanel" class="blocking-panel hidden" role="status"></div>
+        <div id="qualityChecks" class="quality-checks empty-state">Quality categories and checks will appear here.</div>
+        <div class="gate-actions">
+          <button id="approveStage" disabled>Approve selected stage</button>
+          <button id="transferDistributor" class="quiet" disabled>Transfer to distributor</button>
+          <button id="transferRetailer" class="quiet" disabled>Transfer to retailer</button>
+        </div>
+      </section>
+      </div>
+
+      <section id="consumer" class="consumer-section">
+        <div class="consumer-copy">
+          <div class="eyebrow">Customer experience · read only</div>
+          <h2>Verify what matters.<br>Nothing private.</h2>
+          <p>Customers verify authenticity, provenance and final quality status. They never perform operational quality checks and cannot see internal evidence or notes.</p>
+          <form id="verifyForm" class="verify-form"><input id="verifyCode" value="OC-LUX-SERUM-0001" aria-label="Product code"><button>Verify product</button></form>
+        </div>
+        <div id="consumerResult" class="consumer-card">
+          <span class="seal">OC</span><p>Enter the product code to view the consumer-safe record.</p>
+        </div>
+      </section>
+
+      <section id="admin" class="section admin-section hidden">
+        <div class="section-title"><div><span>Administrator only</span><h2>Audit activity & demo controls</h2></div><button id="refreshAudit" class="quiet" type="button">Refresh Audit</button></div>
+        <p class="intro">Recent application events identify the authenticated fictional actor. Tokens, passwords, private keys, and internal file paths are never logged.</p>
+        <div class="reference-admin">
+          <div class="section-title compact"><div><span>Controlled references</span><h3>Quality governance</h3></div></div>
+          <div id="profileSummary" class="profile-summary empty-state">Loading the active quality profile…</div>
+          <div class="governance-grid">
+            <section><h4>Product Specifications</h4><div id="specificationRegistry" class="governance-list empty-state">Loading specifications…</div></section>
+            <section><h4>Evidence Issuers</h4><div id="issuerRegistry" class="governance-list empty-state">Loading issuers…</div></section>
+            <section><h4>Source Review</h4><div id="sourceReviewRegistry" class="governance-list empty-state">Loading source reviews…</div></section>
+            <section><h4>Change History</h4><div id="changeRegistry" class="governance-list empty-state">Loading change records…</div></section>
+          </div>
+          <details class="source-details"><summary>Quality source registry</summary><div id="sourceRegistry" class="source-registry empty-state">Loading verified source metadata…</div></details>
+        </div>
+        <div id="auditList" class="audit-list empty-state">Sign in as Admin to view audit activity.</div>
+        <div class="admin-controls">
+          <div class="presentation-loader"><strong>One-click presentation setup</strong><p>Creates the fictional raw material, finished batch, evidence, four approvals, transfers, and final sale-ready state on the running local blockchain.</p><button id="loadPresentationButton" type="button">Load Complete Presentation Demo</button></div>
+          <div><strong>Metadata tamper demonstration</strong><p>Intentionally alter local product metadata, then use public verification to demonstrate a blockchain hash mismatch.</p><button id="tamperButton" class="danger" type="button" disabled>Demo: Tamper Local Metadata</button></div>
+          <div><strong>Reset local demo data</strong><p>Clears SQLite operational records and uploaded evidence. Seeded login accounts and audit history remain. Hardhat is not reset.</p><button id="resetButton" class="danger" type="button">Reset Local Demo Data</button></div>
         </div>
       </section>
     </main>
+    <footer><strong>OriginChain</strong><span>Educational local demonstration · Not a regulatory compliance claim</span></footer>
 
+    <dialog id="tamperDialog" class="confirm-dialog">
+      <form method="dialog">
+        <div class="eyebrow">Presentation-only action</div>
+        <h2>Tamper local metadata?</h2>
+        <p>This intentionally alters the local brand and description without changing the blockchain commitment. Verification should then show a blockchain hash mismatch and <strong>Suspicious</strong> status.</p>
+        <div class="dialog-actions"><button value="cancel" class="quiet">Cancel</button><button id="confirmTamper" value="confirm">Run tamper demo</button></div>
+      </form>
+    </dialog>
+    <dialog id="resetDialog" class="confirm-dialog">
+      <form method="dialog">
+        <div class="eyebrow">Local reset boundary</div>
+        <h2>Reset local demo data?</h2>
+        <p>This clears the SQLite demo database and uploaded evidence. It <strong>does not reset the running Hardhat blockchain</strong>. Reusing the same product code may require restarting Hardhat and redeploying.</p>
+        <div class="dialog-actions"><button value="cancel" class="quiet">Cancel</button><button id="confirmReset" value="confirm" class="danger-solid">Reset local data</button></div>
+      </form>
+    </dialog>
     <script src="/static/app.js"></script>
   </body>
 </html>

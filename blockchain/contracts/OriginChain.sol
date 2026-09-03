@@ -13,6 +13,14 @@ contract OriginChain {
 
     mapping(bytes32 => ProductUnit) private products;
     mapping(bytes32 => address[]) private ownershipHistories;
+    mapping(bytes32 => mapping(bytes32 => QualityCommitment)) private qualityCommitments;
+    mapping(bytes32 => mapping(bytes32 => bool)) private evidenceCommitments;
+
+    struct QualityCommitment {
+        uint8 status;
+        bytes32 commitmentHash;
+        uint256 recordedAt;
+    }
 
     event ProductRegistered(
         bytes32 indexed productKey,
@@ -25,6 +33,23 @@ contract OriginChain {
         bytes32 indexed productKey,
         address indexed previousOwner,
         address indexed newOwner,
+        uint256 timestamp
+    );
+
+    event QualityStageRecorded(
+        bytes32 indexed productKey,
+        bytes32 indexed stageKey,
+        uint8 status,
+        bytes32 commitmentHash,
+        address indexed recordedBy,
+        uint256 timestamp
+    );
+
+    event EvidenceHashRecorded(
+        bytes32 indexed productKey,
+        bytes32 indexed evidenceHash,
+        bytes32 indexed stageKey,
+        address recordedBy,
         uint256 timestamp
     );
 
@@ -113,5 +138,58 @@ contract OriginChain {
 
     function getOwnershipHistory(bytes32 productKey) external view returns (address[] memory) {
         return ownershipHistories[productKey];
+    }
+
+    function recordQualityStage(
+        bytes32 productKey,
+        bytes32 stageKey,
+        uint8 status,
+        bytes32 commitmentHash
+    ) external {
+        ProductUnit storage product = products[productKey];
+        require(product.exists, "Product not registered");
+        require(msg.sender == product.currentOwner, "Only current owner can record quality");
+        require(stageKey != bytes32(0), "Invalid stage key");
+        require(status >= 1 && status <= 3, "Invalid quality status");
+        require(commitmentHash != bytes32(0), "Invalid commitment hash");
+
+        qualityCommitments[productKey][stageKey] = QualityCommitment({
+            status: status,
+            commitmentHash: commitmentHash,
+            recordedAt: block.timestamp
+        });
+
+        emit QualityStageRecorded(
+            productKey, stageKey, status, commitmentHash, msg.sender, block.timestamp
+        );
+    }
+
+    function getQualityStage(bytes32 productKey, bytes32 stageKey)
+        external
+        view
+        returns (uint8 status, bytes32 commitmentHash, uint256 recordedAt)
+    {
+        QualityCommitment storage quality = qualityCommitments[productKey][stageKey];
+        return (quality.status, quality.commitmentHash, quality.recordedAt);
+    }
+
+    function recordEvidenceHash(bytes32 productKey, bytes32 stageKey, bytes32 evidenceHash) external {
+        ProductUnit storage product = products[productKey];
+        require(product.exists, "Product not registered");
+        require(msg.sender == product.currentOwner, "Only current owner can record evidence");
+        require(stageKey != bytes32(0), "Invalid stage key");
+        require(evidenceHash != bytes32(0), "Invalid evidence hash");
+        require(!evidenceCommitments[productKey][evidenceHash], "Evidence already registered");
+
+        evidenceCommitments[productKey][evidenceHash] = true;
+        emit EvidenceHashRecorded(productKey, evidenceHash, stageKey, msg.sender, block.timestamp);
+    }
+
+    function isEvidenceRegistered(bytes32 productKey, bytes32 evidenceHash)
+        external
+        view
+        returns (bool)
+    {
+        return evidenceCommitments[productKey][evidenceHash];
     }
 }

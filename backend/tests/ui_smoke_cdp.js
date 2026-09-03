@@ -1,206 +1,175 @@
+// Optional cross-platform browser smoke. Requires a running app and Chrome/Edge.
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const chromeCandidates = [
+const candidates = process.platform === "darwin" ? [
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+] : [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
 ];
-
-const chromePath = chromeCandidates.find((candidate) => fs.existsSync(candidate));
-if (!chromePath) {
-  console.error("No Chrome or Edge executable found for UI smoke.");
+const executable = candidates.find(fs.existsSync);
+if (!executable) {
+  console.error("No supported Chrome or Edge executable found; UI smoke not run.");
   process.exit(1);
 }
 
 const port = 9300 + Math.floor(Math.random() * 500);
-const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "originchain-chrome-"));
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), "originchain-ui-"));
 const pageUrl = process.env.ORIGINCHAIN_UI_URL || "http://127.0.0.1:8000/";
-const errors = [];
+const browser = spawn(executable, ["--headless=new", "--disable-gpu", "--no-first-run",
+  `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, "about:blank"], { stdio: "ignore" });
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const chrome = spawn(chromePath, [
-  "--headless=new",
-  "--disable-gpu",
-  "--no-first-run",
-  "--no-default-browser-check",
-  `--remote-debugging-port=${port}`,
-  `--user-data-dir=${userDataDir}`,
-  "about:blank",
-], { stdio: "ignore" });
-
-async function cleanup() {
-  if (!chrome.killed) {
-    chrome.kill();
-    await delay(500);
-  }
-  try {
-    fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-  } catch (_error) {
-    // Chrome can hold profile locks for a moment on Windows; the temp directory is disposable.
-  }
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function getJson(url, attempts = 30) {
-  let lastError;
-  for (let i = 0; i < attempts; i += 1) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) return response.json();
-    } catch (error) {
-      lastError = error;
-    }
+async function json(url, attempts = 40) {
+  for (let index = 0; index < attempts; index += 1) {
+    try { const response = await fetch(url); if (response.ok) return response.json(); } catch (_) { /* retry */ }
     await delay(250);
   }
-  throw lastError || new Error(`Unable to fetch ${url}`);
-}
-
-async function openCdp(wsUrl) {
-  const ws = new WebSocket(wsUrl);
-  const pending = new Map();
-  let id = 0;
-
-  ws.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    if (message.id && pending.has(message.id)) {
-      const { resolve, reject } = pending.get(message.id);
-      pending.delete(message.id);
-      if (message.error) reject(new Error(message.error.message));
-      else resolve(message.result);
-      return;
-    }
-
-    if (message.method === "Runtime.consoleAPICalled" && message.params.type === "error") {
-      errors.push(`console.error: ${message.params.args.map((arg) => arg.value || arg.description).join(" ")}`);
-    }
-    if (message.method === "Runtime.exceptionThrown") {
-      errors.push(`exception: ${message.params.exceptionDetails.text}`);
-    }
-  });
-
-  await new Promise((resolve, reject) => {
-    ws.addEventListener("open", resolve, { once: true });
-    ws.addEventListener("error", reject, { once: true });
-  });
-
-  return {
-    send(method, params = {}) {
-      id += 1;
-      ws.send(JSON.stringify({ id, method, params }));
-      return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
-    },
-    close() {
-      ws.close();
-    },
-  };
+  throw new Error(`Unable to reach ${url}`);
 }
 
 async function main() {
-  try {
-    await getJson(`http://127.0.0.1:${port}/json/version`);
-    const response = await fetch(
-      `http://127.0.0.1:${port}/json/new?${encodeURIComponent(pageUrl)}`,
-      { method: "PUT" }
-    );
-    if (!response.ok) {
-      throw new Error(`Unable to create Chrome target: HTTP ${response.status}`);
+  const version = await json(`http://127.0.0.1:${port}/json/version`);
+  if (!version.Browser) throw new Error("Browser debugging endpoint did not identify a browser");
+  const targetResponse = await fetch(`http://127.0.0.1:${port}/json/new?${encodeURIComponent(pageUrl)}`, { method: "PUT" });
+  const target = await targetResponse.json();
+  const socket = new WebSocket(target.webSocketDebuggerUrl);
+  const pending = new Map(); let sequence = 0; const errors = [];
+  socket.addEventListener("message", ({ data }) => {
+    const event = JSON.parse(data);
+    if (event.id && pending.has(event.id)) {
+      const item = pending.get(event.id); pending.delete(event.id);
+      return event.error ? item.reject(new Error(event.error.message)) : item.resolve(event.result);
     }
-    const page = await response.json();
-    const cdp = await openCdp(page.webSocketDebuggerUrl);
-
-    await cdp.send("Runtime.enable");
-    await cdp.send("Page.enable");
-    await delay(2000);
-
-    const result = await cdp.send("Runtime.evaluate", {
-      awaitPromise: true,
-      returnByValue: true,
-      expression: `
-        (async () => {
-          const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-          const text = (selector) => document.querySelector(selector)?.textContent || "";
-          const waitFor = async (predicate, label, timeout = 20000) => {
-            const started = Date.now();
-            while (Date.now() - started < timeout) {
-              if (predicate()) return true;
-              await delay(200);
-            }
-            throw new Error("Timed out waiting for " + label);
-          };
-          const click = async (selector) => {
-            const element = document.querySelector(selector);
-            if (!element) throw new Error("Missing element " + selector);
-            await waitFor(() => !element.disabled, selector + " enabled");
-            element.click();
-            await delay(100);
-          };
-          const visibleEnabled = (selector) => {
-            const element = document.querySelector(selector);
-            return element && !element.classList.contains("hidden") && !element.disabled;
-          };
-
-          await waitFor(() => text("#chainStatus").includes("Connected"), "blockchain status");
-          await click("#resetButton");
-          await waitFor(() => text("#verificationResult").includes("Local metadata cleared"), "reset");
-          await click("#registerButton");
-          await waitFor(() => text("#registrationResult").includes("Product registered on blockchain"), "registration");
-          await waitFor(() => visibleEnabled("#transferDistributorButton"), "transfer distributor button");
-          await click("#transferDistributorButton");
-          await waitFor(() => text("#transferLog").includes("MANUFACTURER") && text("#transferLog").includes("DISTRIBUTOR"), "transfer distributor");
-          await waitFor(() => visibleEnabled("#transferRetailerButton"), "transfer retailer button");
-          await click("#transferRetailerButton");
-          await waitFor(() => text("#transferLog").includes("DISTRIBUTOR") && text("#transferLog").includes("RETAILER"), "transfer retailer");
-          await click("#verifyButton");
-          await waitFor(() => text("#verificationResult").includes("Genuine Product") && text("#verificationResult").includes("RETAILER"), "genuine verification");
-
-          document.querySelector("#verifyCode").value = "OC-UNKNOWN-9999";
-          await click("#verifyButton");
-          await waitFor(() => text("#verificationResult").includes("Product not found"), "unknown verification");
-
-          document.querySelector("#verifyCode").value = document.querySelector("#productCode").value;
-          await click("#verifyButton");
-          await waitFor(() => text("#verificationResult").includes("Genuine Product"), "restore genuine verification");
-          await click("#tamperButton");
-          await waitFor(() => text("#verificationResult").includes("Suspicious"), "tamper suspicious verification");
-
-          return {
-            title: document.querySelector("h1").textContent,
-            chainStatus: text("#chainStatus"),
-            contract: text("#contractAddress"),
-            registration: text("#registrationResult"),
-            transfers: text("#transferLog"),
-            verification: text("#verificationResult"),
-            tamper: text("#tamperResult"),
-          };
-        })()
-      `,
-    });
-
-    if (result.exceptionDetails) {
-      throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
+    if (event.method === "Runtime.exceptionThrown") errors.push(event.params.exceptionDetails.text);
+  });
+  await new Promise((resolve, reject) => { socket.addEventListener("open", resolve, { once: true }); socket.addEventListener("error", reject, { once: true }); });
+  const send = (method, params = {}) => new Promise((resolve, reject) => {
+    sequence += 1; pending.set(sequence, { resolve, reject }); socket.send(JSON.stringify({ id: sequence, method, params }));
+  });
+  await send("Runtime.enable"); await send("Page.enable"); await delay(1800);
+  const evaluated = await send("Runtime.evaluate", { returnByValue: true, expression: `(() => {
+    const required = ["#access", "#loginForm", "#accountPanel", "#operationalApp", "#dashboard", "#overviewSummary", "#journey", "#materials", "#manufacturing", "#operations", "#consumer", "#materialForm", "#productForm", "#verifyForm", "#admin", "#tamperDialog", "#resetDialog"];
+    const missing = required.filter((selector) => !document.querySelector(selector));
+    return { title: document.title, h1: document.querySelector("h1")?.textContent, missing,
+      sections: document.querySelectorAll("main section").length,
+      chain: document.querySelector("#chainPill")?.textContent.trim(),
+      loginVisible: !document.querySelector("#access").classList.contains("hidden"),
+      operationalHidden: document.querySelector("#operationalApp").hidden,
+      publicVerifyVisible: document.querySelector("#consumer").getClientRects().length > 0,
+      horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth };
+  })()` });
+  const result = evaluated.result.value;
+  const interaction = await send("Runtime.evaluate", { returnByValue: true, awaitPromise: true, expression: `(async () => {
+    const pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+    const visible = (selector) => {
+      const element = document.querySelector(selector);
+      return Boolean(element && element.getClientRects().length && getComputedStyle(element).visibility !== "hidden");
+    };
+    const login = async (username) => {
+      document.querySelector("#loginUsername").value = username;
+      document.querySelector("#loginPassword").value = "OriginDemo2026!";
+      document.querySelector("#loginForm").requestSubmit();
+      await pause(1400);
+      const stages = [...document.querySelectorAll(".stage-tabs button")]
+        .filter((button) => !button.hidden).map((button) => button.dataset.stage);
+      const snapshot = {
+        username,
+        roleBadge: document.querySelector("#accountRole").textContent.trim(),
+        loginHidden: document.querySelector("#access").classList.contains("hidden"),
+        accountVisible: visible("#accountPanel"),
+        materialsVisible: visible("#materials"),
+        materialFormVisible: visible("#materialRegistrationPanel"),
+        manufacturingVisible: visible("#manufacturing"),
+        productFormVisible: visible("#productForm"),
+        adminVisible: visible("#admin"),
+        stages,
+      };
+      document.querySelector("#logoutButton").click();
+      await pause(150);
+      snapshot.loggedOut = !document.querySelector("#access").classList.contains("hidden")
+        && document.querySelector("#operationalApp").hidden;
+      return snapshot;
+    };
+    document.querySelector('a[href="#consumer"]').click();
+    await pause(100);
+    document.querySelector("#verifyCode").value = "OC-LUX-SERUM-0001";
+    document.querySelector("#verifyForm").requestSubmit();
+    await pause(900);
+    const consumerText = document.querySelector("#consumerResult").textContent.replace(/\\s+/g, " ").trim();
+    const publicVerification = {
+      consumerResult: consumerText,
+      consumerHasQcControls: Boolean(document.querySelector("#consumerResult select, #consumerResult .check-row, #consumerResult .save-check")),
+      consumerLeaksWallet: /0x[a-fA-F0-9]{40}/.test(consumerText),
+      consumerLeaksStorageName: consumerText.includes("stored_filename"),
+    };
+    const roles = [];
+    for (const username of ["supplier", "manufacturer", "distributor", "retailer", "admin"]) {
+      roles.push(await login(username));
     }
-
-    cdp.close();
-
-    if (errors.length) {
-      throw new Error(`Browser console/runtime errors: ${errors.join("; ")}`);
-    }
-
-    console.log(JSON.stringify(result.result.value, null, 2));
-  } finally {
-    await cleanup();
+    document.querySelector("#loginUsername").value = "supplier";
+    document.querySelector("#loginPassword").value = "OriginDemo2026!";
+    document.querySelector("#loginForm").requestSubmit();
+    await pause(1200);
+    state.token = "malformed.saved.token";
+    try { await api("/api/products"); } catch (_) { /* expected invalid-token response */ }
+    await pause(100);
+    return {
+      hash: location.hash,
+      publicVerification,
+      roles,
+      invalidTokenReturnedToLogin: !document.querySelector("#access").classList.contains("hidden")
+        && document.querySelector("#operationalApp").hidden
+        && localStorage.getItem("originchain_demo_access_token") === null,
+    };
+  })()` });
+  await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await delay(350);
+  const mobile = await send("Runtime.evaluate", { returnByValue: true, expression: `({
+    horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    journeyColumns: getComputedStyle(document.querySelector("#journey")).gridTemplateColumns,
+    actionWidth: document.querySelector("#verifyForm button")?.getBoundingClientRect().width,
+  })` });
+  const interactionResult = interaction.result.value;
+  const mobileResult = mobile.result.value;
+  const publicVerification = interactionResult.publicVerification;
+  const role = Object.fromEntries(interactionResult.roles.map((item) => [item.username, item]));
+  const expectedStages = {
+    supplier: ["RAW_MATERIAL_SUPPLIER"],
+    manufacturer: ["RAW_MATERIAL_SUPPLIER", "MANUFACTURER"],
+    distributor: ["MANUFACTURER", "DISTRIBUTOR"],
+    retailer: ["MANUFACTURER", "DISTRIBUTOR", "RETAILER"],
+    admin: ["RAW_MATERIAL_SUPPLIER", "MANUFACTURER", "DISTRIBUTOR", "RETAILER"],
+  };
+  const roleFailure = interactionResult.roles.some((item) => !item.loginHidden || !item.accountVisible
+    || !item.loggedOut || item.roleBadge.length === 0
+    || JSON.stringify(item.stages) !== JSON.stringify(expectedStages[item.username]));
+  const failed = result.missing.length || errors.length || result.horizontalOverflow
+    || !result.loginVisible || !result.operationalHidden || !result.publicVerifyVisible
+    || interactionResult.hash !== "#consumer" || mobileResult.horizontalOverflow
+    || roleFailure || !interactionResult.invalidTokenReturnedToLogin
+    || !role.supplier.materialsVisible || !role.supplier.materialFormVisible || role.supplier.manufacturingVisible
+    || !role.manufacturer.materialsVisible || role.manufacturer.materialFormVisible
+    || !role.manufacturer.manufacturingVisible || !role.manufacturer.productFormVisible
+    || role.distributor.materialsVisible || !role.distributor.manufacturingVisible || role.distributor.productFormVisible
+    || role.retailer.materialsVisible || !role.retailer.manufacturingVisible || role.retailer.productFormVisible
+    || !role.admin.adminVisible || role.admin.productFormVisible
+    || publicVerification.consumerHasQcControls || publicVerification.consumerLeaksWallet
+    || publicVerification.consumerLeaksStorageName;
+  if (failed) {
+    throw new Error(JSON.stringify({ result, interaction: interactionResult, mobile: mobileResult, errors }));
   }
+  console.log(JSON.stringify({ page: result, interaction: interactionResult, mobile: mobileResult }, null, 2));
+  socket.close();
 }
 
-main().catch((error) => {
-  console.error(error);
-  cleanup().finally(() => {
-    process.exit(1);
-  });
-});
+main().finally(async () => {
+  if (!browser.killed) browser.kill();
+  await delay(300);
+  fs.rmSync(profile, { recursive: true, force: true, maxRetries: 4 });
+}).catch((error) => { console.error(error); process.exitCode = 1; });

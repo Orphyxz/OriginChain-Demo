@@ -1,12 +1,16 @@
-const fs = require("fs");
-const path = require("path");
-const hre = require("hardhat");
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import hre from "hardhat";
+
+const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 
 async function main() {
-  const [manufacturer, distributor, retailer] = await hre.ethers.getSigners();
-  const network = await hre.ethers.provider.getNetwork();
+  const { ethers, networkName } = await hre.network.create();
+  const [manufacturer, distributor, retailer] = await ethers.getSigners();
+  const network = await ethers.provider.getNetwork();
 
-  const OriginChain = await hre.ethers.getContractFactory("OriginChain");
+  const OriginChain = await ethers.getContractFactory("OriginChain");
   const originChain = await OriginChain.deploy();
   await originChain.waitForDeployment();
 
@@ -16,7 +20,7 @@ async function main() {
   const artifact = await hre.artifacts.readArtifact("OriginChain");
 
   const deployment = {
-    network: hre.network.name,
+    network: networkName,
     chainId: network.chainId.toString(),
     contractName: "OriginChain",
     contractAddress,
@@ -32,18 +36,17 @@ async function main() {
     abi: artifact.abi
   };
 
-  const deploymentsDir = path.join(__dirname, "..", "deployments");
-  fs.mkdirSync(deploymentsDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(deploymentsDir, "local.json"),
-    `${JSON.stringify(deployment, null, 2)}\n`
-  );
+  const deploymentPath = process.env.ORIGINCHAIN_DEPLOYMENT_PATH
+    ? path.resolve(process.env.ORIGINCHAIN_DEPLOYMENT_PATH)
+    : path.join(currentDirectory, "..", "deployments", "local.json");
+  fs.mkdirSync(path.dirname(deploymentPath), { recursive: true });
+  fs.writeFileSync(deploymentPath, `${JSON.stringify(deployment, null, 2)}\n`);
 
   console.log(`OriginChain deployed to ${contractAddress}`);
-  console.log(`Network: ${hre.network.name} (${network.chainId.toString()})`);
+  console.log(`Network: ${networkName} (${network.chainId.toString()})`);
   console.log(`Transaction: ${deploymentTransaction.hash}`);
   console.log(`Block: ${receipt.blockNumber}`);
-  console.log("Deployment details written to deployments/local.json");
+  console.log(`Deployment details written to ${deploymentPath}`);
 }
 
 main().catch((error) => {

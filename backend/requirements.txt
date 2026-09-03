@@ -1,6 +1,10 @@
 fastapi>=0.116,<1
 uvicorn[standard]>=0.35,<1
-web3>=7,<8
-pytest>=8,<9
+web3>=8,<9
+pytest>=9.0.3,<10
 httpx>=0.28,<1
+httpx2>=2.12,<3
 qrcode[pil]>=8,<9
+python-multipart>=0.0.20,<1
+pwdlib[argon2]>=0.3,<1
+PyJWT>=2.10,<3

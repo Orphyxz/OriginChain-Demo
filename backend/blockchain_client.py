@@ -180,6 +180,54 @@ class BlockchainClient:
         history = self.contract.functions.getOwnershipHistory(product_key).call()
         return [Web3.to_checksum_address(address) for address in history]
 
+    def record_quality_stage(
+        self, product_key: str, stage: str, status: int, commitment_hash: str
+    ) -> dict[str, Any]:
+        self.require_ready()
+        product = self.get_product(product_key)
+        if not product["exists"]:
+            raise ValueError("Product not registered on blockchain")
+        stage_key = Web3.keccak(text=stage)
+        tx_hash = self.contract.functions.recordQualityStage(
+            product_key, stage_key, status, commitment_hash
+        ).transact({"from": product["current_owner"]})
+        receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=self.receipt_timeout)
+        if receipt.status != 1:
+            raise BlockchainUnavailable("quality-stage transaction failed")
+        return {
+            "transaction_hash": Web3.to_hex(receipt.transactionHash),
+            "block_number": receipt.blockNumber,
+        }
+
+    def record_evidence_hash(
+        self, product_key: str, stage: str, evidence_hash: str
+    ) -> dict[str, Any]:
+        self.require_ready()
+        product = self.get_product(product_key)
+        if not product["exists"]:
+            raise ValueError("Product not registered on blockchain")
+        tx_hash = self.contract.functions.recordEvidenceHash(
+            product_key, Web3.keccak(text=stage), evidence_hash
+        ).transact({"from": product["current_owner"]})
+        receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=self.receipt_timeout)
+        if receipt.status != 1:
+            raise BlockchainUnavailable("evidence-hash transaction failed")
+        return {
+            "transaction_hash": Web3.to_hex(receipt.transactionHash),
+            "block_number": receipt.blockNumber,
+        }
+
+    def get_quality_stage(self, product_key: str, stage: str) -> dict[str, Any]:
+        self.require_ready()
+        result = self.contract.functions.getQualityStage(
+            product_key, Web3.keccak(text=stage)
+        ).call()
+        return {
+            "status": int(result[0]),
+            "commitment_hash": Web3.to_hex(result[1]),
+            "recorded_at": int(result[2]),
+        }
+
     def network_info(self) -> dict[str, Any]:
         health = self.health()
         return {

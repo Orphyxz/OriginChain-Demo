@@ -2,6 +2,7 @@
   "name": "originchain-blockchain",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "OriginChain emergency demo smart contract project",
   "scripts": {
     "compile": "hardhat compile",
@@ -9,7 +10,9 @@
     "deploy:local": "hardhat run scripts/deploy.js --network localhost"
   },
   "devDependencies": {
-    "@nomicfoundation/hardhat-toolbox": "^6.1.0",
-    "hardhat": "^2.26.3"
+    "@nomicfoundation/hardhat-ethers": "^4.0.15",
+    "@nomicfoundation/hardhat-node-test-runner": "^3.1.0",
+    "ethers": "^6.17.0",
+    "hardhat": "^3.15.0"
   }
 }
