@@ -4,6 +4,8 @@
 
 OriginChain is an educational local demonstration built around one fictional flagship product: **Aurelia Prestige Renewal Serum**, a luxury anti-aging facial serum. It records product authenticity and compact quality commitments on a local blockchain while keeping operational records and evidence files off-chain.
 
+For a one-page overview of what the project is and how it works, see the [Project Report](docs/PROJECT_REPORT.md), or click **About** in the app header.
+
 > This project does not claim production readiness, legal compliance, laboratory validation, regulatory approval, market authorization, or affiliation with any real cosmetics brand. The source metadata is real and official; the product, companies, inspection results, and evidence are fictional demonstration data.
 
 ## Working demonstration
@@ -196,11 +198,29 @@ Admin is intentionally not an all-powerful supply-chain actor. It can inspect al
 
 ## Supervisor demonstration guide
 
+### 5-Minute Presentation Flow
+
+Demo Auto-Fill exists solely to speed up the local university presentation. It uses the real quality service, evidence-integrity checks, approval gates, actor attribution, custody rules, and blockchain writes. It does not replace the manual workflow. Keep `ORIGINCHAIN_DEMO_MODE=1` only for the local demo.
+
+1. Start a fresh Hardhat node, deploy the contract, and start FastAPI.
+2. Admin → **Run Demo Readiness Check** → confirm `READY` → **Prepare Fresh Demo**.
+3. Supplier → **Demo Auto-Fill** → sign out.
+4. Manufacturer → **Demo Auto-Fill** → **Transfer to Distributor** → sign out.
+5. Distributor → **Demo Auto-Fill** → **Transfer to Retailer** → sign out.
+6. Retailer → **Demo HOLD Case** → show the failed seal and `HOLD` → **Fix Demo Issue** → sign out.
+7. Public verification → verify the product code shown by the app → show `Authentic` and `Approved for Sale`.
+8. Admin → **Demo: Tamper Local Metadata** → sign out.
+9. Public verification → verify again → show `Suspicious` and the blockchain hash mismatch.
+
+The overview's **Demo Progress** row is calculated from live approvals, custody, sale status, and blockchain metadata integrity. Transfers intentionally remain manual so custody changes are visible during the presentation.
+
 ### Fast presentation mode
 
 For a presentation without manual data entry, sign in as `admin` and click **Load Complete Presentation Demo** in the Admin section. The server creates or finishes the fictional material/product records, required evidence, four stage approvals, Manufacturer → Distributor → Retailer transfers, and the final `APPROVED_FOR_SALE` state against the running local Hardhat chain. You can then use the Admin stage tabs to inspect every stage and use the product code automatically placed in Public Verification. This is normally `OC-LUX-SERUM-0001`; after a local-only reset, the loader safely chooses an unused `OC-LUX-SERUM-PRESENTATION-####` code if the canonical code still exists on-chain. The fixture is explicitly fictional and creates no certification or accreditation claim.
 
 The button is idempotent after completion and can also finish a normal partially registered batch at Manufacturer, Distributor, or Retailer stage. It remains Admin-only and requires a connected, deployed local blockchain.
+
+The recommended live walkthrough is the role-by-role flow above. The Admin full loader remains available as a fallback when only the final state needs to be shown.
 
 ### Manual role-by-role mode
 
@@ -316,6 +336,11 @@ Role-enforced writes and administration:
 - `POST /api/quality/stages/approve` — actor matching the requested stage and current product custody
 - `POST /api/quality/results/{result_id}/evidence` — actor matching the result's stored stage and current product custody
 - `POST /api/ownership-transfers` — Manufacturer → Distributor or Distributor → Retailer, with current-custody and live-quality checks
+- `POST /api/demo/auto-fill` — signed-in Supplier, Manufacturer, Distributor, or Retailer; completes only that actor's current stage
+- `POST /api/demo/retailer-hold` — Retailer-only fictional security-seal failure using the normal quality gate
+- `POST /api/demo/presentation-seed` — Admin-only; loads the complete fictional presentation state
+- `GET /api/demo/progress` — authenticated, live presentation progress
+- `GET /api/demo/readiness` — Admin-only preflight check
 - `GET /api/audit`, `POST /api/demo/tamper/{product_code}`, `POST /api/demo/reset` — Admin
 - `GET /api/quality/source-reviews`, `GET/POST /api/quality/change-records` — Admin
 - `POST /api/evidence/issuers/{issuer_code}/status` — Admin, with mandatory reason
@@ -343,6 +368,7 @@ With all three local services running, execute the real API smoke separately:
 cd /Users/aryxzing/Desktop/OriginChain-Demo
 source .venv/bin/activate
 python backend/tests/integration_smoke.py
+python backend/tests/integration_demo_autofill.py
 PYTHONPATH=. .venv/bin/python backend/tests/integration_revoked_issuer.py
 ```
 
@@ -351,6 +377,8 @@ Run the revoked-issuer drill after (or independently of) the primary smoke while
 ## Reset boundary
 
 Admin-authenticated `POST /api/demo/reset` removes local SQLite operational records and files under `backend/uploads/`. It preserves users, audit history, product specifications, specification requirements, source/profile governance, evidence issuers, source reviews, and change records. It does **not** reset blockchain state. To reuse the same product code from a fully clean chain, restart the Hardhat node and redeploy the contract.
+
+The Admin UI labels this action **Prepare Fresh Demo** and repeats the boundary before running it. For a completely fresh presentation: stop FastAPI, restart `npx hardhat node`, run `npm run deploy:local`, start FastAPI, then click **Prepare Fresh Demo**. The browser never attempts to stop or restart system processes.
 
 ### Duplicate product troubleshooting
 

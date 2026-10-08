@@ -9,7 +9,7 @@
     "distributor": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
     "retailer": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"
   },
-  "transactionHash": "0x27f7bca628b31b2e1fb38f9cd5f80c1fc2f981575f993b5fc817bd6d40af433c",
+  "transactionHash": "0x404a3c52893dead5fa6dc93614c3c607ee7bcbf16bd436a2deebe49c5be1fdf1",
   "blockNumber": 1,
   "abiPath": "blockchain/artifacts/contracts/OriginChain.sol/OriginChain.json",
   "abi": [

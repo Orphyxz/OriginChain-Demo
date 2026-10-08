@@ -7,10 +7,12 @@ const path = require("node:path");
 const candidates = process.platform === "darwin" ? [
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+  "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
 ] : [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+  "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
 ];
 const executable = candidates.find(fs.existsSync);
 if (!executable) {
@@ -21,6 +23,7 @@ if (!executable) {
 const port = 9300 + Math.floor(Math.random() * 500);
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "originchain-ui-"));
 const pageUrl = process.env.ORIGINCHAIN_UI_URL || "http://127.0.0.1:8000/";
+const runFullDemo = process.env.ORIGINCHAIN_UI_FULL_DEMO === "1";
 const browser = spawn(executable, ["--headless=new", "--disable-gpu", "--no-first-run",
   `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, "about:blank"], { stdio: "ignore" });
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -54,7 +57,7 @@ async function main() {
   });
   await send("Runtime.enable"); await send("Page.enable"); await delay(1800);
   const evaluated = await send("Runtime.evaluate", { returnByValue: true, expression: `(() => {
-    const required = ["#access", "#loginForm", "#accountPanel", "#operationalApp", "#dashboard", "#overviewSummary", "#journey", "#materials", "#manufacturing", "#operations", "#consumer", "#materialForm", "#productForm", "#verifyForm", "#admin", "#tamperDialog", "#resetDialog"];
+    const required = ["#access", "#loginForm", "#accountPanel", "#operationalApp", "#dashboard", "#overviewSummary", "#demoProgress", "#demoTools", "#demoAutofillButton", "#demoHoldButton", "#journey", "#materials", "#manufacturing", "#operations", "#consumer", "#materialForm", "#productForm", "#verifyForm", "#admin", "#readinessButton", "#tamperDialog", "#resetDialog", "#demoActionDialog"];
     const missing = required.filter((selector) => !document.querySelector(selector));
     return { title: document.title, h1: document.querySelector("h1")?.textContent, missing,
       sections: document.querySelectorAll("main section").length,
@@ -66,7 +69,15 @@ async function main() {
   })()` });
   const result = evaluated.result.value;
   const interaction = await send("Runtime.evaluate", { returnByValue: true, awaitPromise: true, expression: `(async () => {
+    const runFullDemo = ${JSON.stringify(runFullDemo)};
     const pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+    const until = async (predicate, label, attempts = 160) => {
+      for (let index = 0; index < attempts; index += 1) {
+        if (predicate()) return;
+        await pause(100);
+      }
+      throw new Error(\`Timed out waiting for \${label}\`);
+    };
     const visible = (selector) => {
       const element = document.querySelector(selector);
       return Boolean(element && element.getClientRects().length && getComputedStyle(element).visibility !== "hidden");
@@ -88,6 +99,9 @@ async function main() {
         manufacturingVisible: visible("#manufacturing"),
         productFormVisible: visible("#productForm"),
         adminVisible: visible("#admin"),
+        demoToolsVisible: visible("#demoTools"),
+        demoHoldVisible: visible("#demoHoldButton"),
+        readinessVisible: visible("#readinessButton"),
         stages,
       };
       document.querySelector("#logoutButton").click();
@@ -99,7 +113,7 @@ async function main() {
     document.querySelector('a[href="#consumer"]').click();
     await pause(100);
     document.querySelector("#verifyCode").value = "OC-LUX-SERUM-0001";
-    document.querySelector("#verifyForm").requestSubmit();
+    document.querySelector("#verifyForm button").click();
     await pause(900);
     const consumerText = document.querySelector("#consumerResult").textContent.replace(/\\s+/g, " ").trim();
     const publicVerification = {
@@ -112,6 +126,85 @@ async function main() {
     for (const username of ["supplier", "manufacturer", "distributor", "retailer", "admin"]) {
       roles.push(await login(username));
     }
+    let fullDemoResult = null;
+    if (runFullDemo) {
+      const signIn = async (username) => {
+        document.querySelector("#loginUsername").value = username;
+        document.querySelector("#loginPassword").value = "OriginDemo2026!";
+        document.querySelector("#loginButton").click();
+        await until(() => state.user?.username === username && document.querySelector("#loginButton").getAttribute("aria-busy") !== "true", \`\${username} login\`);
+      };
+      const signOut = async () => {
+        document.querySelector("#logoutButton").click();
+        await until(() => !state.user, "logout");
+      };
+      const confirmDialog = async (openSelector, confirmSelector) => {
+        document.querySelector(openSelector).click();
+        await until(() => document.querySelector(confirmSelector).closest("dialog").open, \`\${openSelector} dialog\`);
+        document.querySelector(confirmSelector).click();
+      };
+
+      await signIn("admin");
+      document.querySelector("#readinessButton").click();
+      await until(() => document.querySelector("#readinessResult").textContent.includes("READY"), "readiness result");
+      const readiness = document.querySelector("#readinessResult").textContent.includes("READY");
+      await confirmDialog("#resetButton", "#confirmReset");
+      await until(() => state.products.length === 0 && state.materials.length === 0, "fresh demo reset");
+      await signOut();
+
+      await signIn("supplier");
+      await confirmDialog("#demoAutofillButton", "#confirmDemoAction");
+      await until(() => state.materials[0]?.quality_status === "APPROVED", "supplier approval");
+      const supplierStatus = state.materials[0].quality_status;
+      await signOut();
+
+      await signIn("manufacturer");
+      await confirmDialog("#demoAutofillButton", "#confirmDemoAction");
+      await until(() => state.activeSummary?.stage === "MANUFACTURER" && state.activeSummary?.status === "APPROVED", "manufacturer approval");
+      const productCode = state.products[0].product_code;
+      document.querySelector("#transferDistributor").click();
+      await until(() => state.products[0]?.current_stage === "DISTRIBUTOR" && document.querySelector("#transferDistributor").getAttribute("aria-busy") !== "true", "Distributor transfer");
+      await signOut();
+
+      await signIn("distributor");
+      await confirmDialog("#demoAutofillButton", "#confirmDemoAction");
+      await until(() => state.activeSummary?.stage === "DISTRIBUTOR" && state.activeSummary?.status === "APPROVED", "Distributor approval");
+      document.querySelector("#transferRetailer").click();
+      await until(() => state.products[0]?.current_stage === "RETAILER" && document.querySelector("#transferRetailer").getAttribute("aria-busy") !== "true", "Retailer transfer");
+      await signOut();
+
+      await signIn("retailer");
+      await confirmDialog("#demoHoldButton", "#confirmDemoAction");
+      await until(() => state.products[0]?.final_sale_status === "HOLD", "Retail HOLD");
+      const holdStatus = state.products[0].final_sale_status;
+      await confirmDialog("#demoAutofillButton", "#confirmDemoAction");
+      await until(() => state.products[0]?.final_sale_status === "APPROVED_FOR_SALE", "Retail correction");
+      const finalSaleStatus = state.products[0].final_sale_status;
+      await signOut();
+
+      document.querySelector("#verifyCode").value = productCode;
+      state.verification = null;
+      document.querySelector("#verifyForm button").click();
+      await until(() => state.verification?.status === "GENUINE", "genuine consumer result");
+      const genuine = state.verification.status;
+
+      await signIn("admin");
+      await confirmDialog("#tamperButton", "#confirmTamper");
+      await until(() => state.verification?.status === "SUSPICIOUS", "tampered verification");
+      await signOut();
+      state.verification = null;
+      document.querySelector("#verifyForm button").click();
+      await until(() => state.verification?.status === "SUSPICIOUS", "public suspicious result");
+      fullDemoResult = {
+        readiness,
+        supplierStatus,
+        productCode,
+        holdStatus,
+        finalSaleStatus,
+        genuine,
+        suspicious: state.verification.status,
+      };
+    }
     document.querySelector("#loginUsername").value = "supplier";
     document.querySelector("#loginPassword").value = "OriginDemo2026!";
     document.querySelector("#loginForm").requestSubmit();
@@ -123,9 +216,36 @@ async function main() {
       hash: location.hash,
       publicVerification,
       roles,
+      fullDemoResult,
       invalidTokenReturnedToLogin: !document.querySelector("#access").classList.contains("hidden")
         && document.querySelector("#operationalApp").hidden
         && localStorage.getItem("originchain_demo_access_token") === null,
+    };
+  })()` });
+  if (interaction.exceptionDetails) {
+    throw new Error(JSON.stringify(interaction.exceptionDetails));
+  }
+  const loginForReload = await send("Runtime.evaluate", { returnByValue: true, awaitPromise: true, expression: `(async () => {
+    document.querySelector("#loginUsername").value = "supplier";
+    document.querySelector("#loginPassword").value = "OriginDemo2026!";
+    document.querySelector("#loginButton").click();
+    for (let index = 0; index < 100 && state.user?.username !== "supplier"; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return Boolean(state.user?.username === "supplier" && localStorage.getItem("originchain_demo_access_token"));
+  })()` });
+  if (!loginForReload.result.value) throw new Error("Could not establish the reload-persistence session");
+  await send("Page.reload");
+  await delay(2200);
+  const reloadCheck = await send("Runtime.evaluate", { returnByValue: true, awaitPromise: true, expression: `(async () => {
+    for (let index = 0; index < 120 && state.user?.username !== "supplier"; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return {
+      restored: state.user?.username === "supplier",
+      role: state.user?.role,
+      activeStage: state.activeStage,
+      operationalVisible: !document.querySelector("#operationalApp").hidden,
     };
   })()` });
   await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
@@ -137,6 +257,7 @@ async function main() {
   })` });
   const interactionResult = interaction.result.value;
   const mobileResult = mobile.result.value;
+  const reloadResult = reloadCheck.result.value;
   const publicVerification = interactionResult.publicVerification;
   const role = Object.fromEntries(interactionResult.roles.map((item) => [item.username, item]));
   const expectedStages = {
@@ -152,19 +273,31 @@ async function main() {
   const failed = result.missing.length || errors.length || result.horizontalOverflow
     || !result.loginVisible || !result.operationalHidden || !result.publicVerifyVisible
     || interactionResult.hash !== "#consumer" || mobileResult.horizontalOverflow
+    || !reloadResult.restored || reloadResult.role !== "RAW_MATERIAL_SUPPLIER"
+    || reloadResult.activeStage !== "RAW_MATERIAL_SUPPLIER" || !reloadResult.operationalVisible
     || roleFailure || !interactionResult.invalidTokenReturnedToLogin
     || !role.supplier.materialsVisible || !role.supplier.materialFormVisible || role.supplier.manufacturingVisible
     || !role.manufacturer.materialsVisible || role.manufacturer.materialFormVisible
     || !role.manufacturer.manufacturingVisible || !role.manufacturer.productFormVisible
     || role.distributor.materialsVisible || !role.distributor.manufacturingVisible || role.distributor.productFormVisible
     || role.retailer.materialsVisible || !role.retailer.manufacturingVisible || role.retailer.productFormVisible
-    || !role.admin.adminVisible || role.admin.productFormVisible
+    || !role.supplier.demoToolsVisible || !role.manufacturer.demoToolsVisible
+    || !role.distributor.demoToolsVisible || !role.retailer.demoToolsVisible
+    || role.supplier.demoHoldVisible || role.manufacturer.demoHoldVisible || role.distributor.demoHoldVisible
+    || !role.retailer.demoHoldVisible || role.admin.demoToolsVisible
+    || !role.admin.adminVisible || !role.admin.readinessVisible || role.admin.productFormVisible
     || publicVerification.consumerHasQcControls || publicVerification.consumerLeaksWallet
-    || publicVerification.consumerLeaksStorageName;
+    || publicVerification.consumerLeaksStorageName
+    || (runFullDemo && (!interactionResult.fullDemoResult?.readiness
+      || interactionResult.fullDemoResult.supplierStatus !== "APPROVED"
+      || interactionResult.fullDemoResult.holdStatus !== "HOLD"
+      || interactionResult.fullDemoResult.finalSaleStatus !== "APPROVED_FOR_SALE"
+      || interactionResult.fullDemoResult.genuine !== "GENUINE"
+      || interactionResult.fullDemoResult.suspicious !== "SUSPICIOUS"));
   if (failed) {
-    throw new Error(JSON.stringify({ result, interaction: interactionResult, mobile: mobileResult, errors }));
+    throw new Error(JSON.stringify({ result, interaction: interactionResult, reload: reloadResult, mobile: mobileResult, errors }));
   }
-  console.log(JSON.stringify({ page: result, interaction: interactionResult, mobile: mobileResult }, null, 2));
+  console.log(JSON.stringify({ page: result, interaction: interactionResult, reload: reloadResult, mobile: mobileResult }, null, 2));
   socket.close();
 }
 

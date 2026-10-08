@@ -21,6 +21,10 @@
         <a href="#consumer">Verify Product</a>
       </nav>
       <div class="header-actions">
+        <button id="aboutButton" class="about-button quiet" type="button" aria-haspopup="dialog">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9.5"/><path d="M12 11v5.5M12 7.6v.1"/></svg>
+          <span>About</span>
+        </button>
         <div id="chainPill" class="chain-pill"><span></span> Connecting</div>
         <div id="accountPanel" class="account-panel hidden">
           <div><strong id="accountName"></strong><small id="accountOrganization"></small><span id="accountRole" class="role-badge"></span></div>
@@ -30,7 +34,7 @@
     </header>
 
     <main>
-      <div id="notice" class="notice hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+      <div id="notice" class="notice hidden" role="status" aria-live="polite" aria-atomic="true"><div id="noticeBody"></div><button id="noticeClose" class="notice-close" type="button" aria-label="Dismiss message">×</button></div>
       <section id="access" class="auth-section">
         <div class="auth-copy">
           <div class="eyebrow">OriginChain · Local educational demo</div>
@@ -48,7 +52,7 @@
             <button id="loginButton" type="submit">Sign In</button>
           </form>
           <div class="demo-accounts">
-            <small>Demo Accounts · fills username only</small>
+            <small>Local Demo Credentials · click to fill sign-in</small>
             <div>
               <button type="button" class="demo-account quiet" data-username="supplier">Supplier</button>
               <button type="button" class="demo-account quiet" data-username="manufacturer">Manufacturer</button>
@@ -72,8 +76,17 @@
           <div><small>Overall quality</small><strong id="overviewQuality">0 of 4 approved</strong><span id="overviewIssues">Workflow not started</span></div>
           <div><small>Final status</small><strong id="overviewSale" class="display-status">Not Ready</strong><span>Retailer is the final quality gate</span></div>
         </div>
+        <div id="demoProgress" class="demo-progress hidden" aria-live="polite"></div>
         <div class="hero-network">
           <small>Local demonstration network</small> <b id="networkName">Checking…</b>
+        </div>
+      </section>
+
+      <section id="demoTools" class="demo-tools hidden" aria-label="Local demo shortcuts">
+        <div><span class="demo-badge">Demo · Local only</span><strong id="demoToolTitle">Complete this stage in one click</strong><p id="demoToolCopy">Uses the normal checks, evidence integrity rules, approval gate, and authenticated actor attribution.</p></div>
+        <div class="demo-tool-actions">
+          <button id="demoHoldButton" class="quiet hidden" type="button">Demo HOLD Case</button>
+          <button id="demoAutofillButton" type="button">Demo Auto-Fill</button>
         </div>
       </section>
 
@@ -181,9 +194,10 @@
         </div>
         <div id="auditList" class="audit-list empty-state">Sign in as Admin to view audit activity.</div>
         <div class="admin-controls">
-          <div class="presentation-loader"><strong>One-click presentation setup</strong><p>Creates the fictional raw material, finished batch, evidence, four approvals, transfers, and final sale-ready state on the running local blockchain.</p><button id="loadPresentationButton" type="button">Load Complete Presentation Demo</button></div>
-          <div><strong>Metadata tamper demonstration</strong><p>Intentionally alter local product metadata, then use public verification to demonstrate a blockchain hash mismatch.</p><button id="tamperButton" class="danger" type="button" disabled>Demo: Tamper Local Metadata</button></div>
-          <div><strong>Reset local demo data</strong><p>Clears SQLite operational records and uploaded evidence. Seeded login accounts and audit history remain. Hardhat is not reset.</p><button id="resetButton" class="danger" type="button">Reset Local Demo Data</button></div>
+          <div class="presentation-loader demo-only"><strong>One-click presentation setup</strong><p>Creates the fictional raw material, finished batch, evidence, four approvals, transfers, and final sale-ready state on the running local blockchain.</p><button id="loadPresentationButton" type="button">Load Complete Presentation Demo</button></div>
+          <div class="demo-only"><strong>Demo readiness</strong><p>Checks the database, Hardhat chain, deployed contract, accounts, governed reference data, evidence storage, and public verification route.</p><button id="readinessButton" type="button">Run Demo Readiness Check</button><div id="readinessResult" class="readiness-result hidden" aria-live="polite"></div></div>
+          <div class="demo-only"><strong>Metadata tamper demonstration</strong><p>Intentionally alter local product metadata, then use public verification to demonstrate a blockchain hash mismatch.</p><button id="tamperButton" class="danger" type="button" disabled>Demo: Tamper Local Metadata</button></div>
+          <div class="demo-only"><strong>Prepare a fresh local demo</strong><p>Clears operational SQLite records and uploaded evidence while preserving users and governed reference data. Hardhat is not reset.</p><button id="resetButton" class="danger" type="button">Prepare Fresh Demo</button></div>
         </div>
       </section>
     </main>
@@ -200,10 +214,99 @@
     <dialog id="resetDialog" class="confirm-dialog">
       <form method="dialog">
         <div class="eyebrow">Local reset boundary</div>
-        <h2>Reset local demo data?</h2>
-        <p>This clears the SQLite demo database and uploaded evidence. It <strong>does not reset the running Hardhat blockchain</strong>. Reusing the same product code may require restarting Hardhat and redeploying.</p>
-        <div class="dialog-actions"><button value="cancel" class="quiet">Cancel</button><button id="confirmReset" value="confirm" class="danger-solid">Reset local data</button></div>
+        <h2>Prepare a fresh local demo?</h2>
+        <p>This clears operational SQLite records and uploaded evidence while preserving users and governed reference data. <strong>It does not reset the running Hardhat blockchain.</strong></p>
+        <p>For a completely fresh demonstration: restart Hardhat, redeploy OriginChain, then click this button.</p>
+        <div class="dialog-actions"><button value="cancel" class="quiet">Cancel</button><button id="confirmReset" value="confirm" class="danger-solid">Prepare fresh demo</button></div>
       </form>
+    </dialog>
+    <dialog id="demoActionDialog" class="confirm-dialog">
+      <form method="dialog">
+        <div class="eyebrow">Demo-only shortcut</div>
+        <h2 id="demoActionTitle">Run Demo Auto-Fill?</h2>
+        <p id="demoActionCopy">This creates fictional inspection results and evidence through the normal quality workflow for the signed-in actor.</p>
+        <div class="dialog-actions"><button value="cancel" class="quiet">Cancel</button><button id="confirmDemoAction" value="confirm">Continue</button></div>
+      </form>
+    </dialog>
+    <dialog id="aboutDialog" class="about" aria-labelledby="aboutTitle">
+      <div class="about-panel">
+        <header class="about-header">
+          <img src="/static/logo.svg" alt="" width="40" height="40">
+          <div>
+            <h2 id="aboutTitle">About OriginChain</h2>
+            <p>Blockchain-backed quality assurance and authenticity for luxury cosmetics</p>
+          </div>
+          <button id="aboutClose" class="about-close" type="button" aria-label="Close">×</button>
+        </header>
+
+        <div class="about-tabs" role="tablist" aria-label="About sections">
+          <button role="tab" type="button" id="aboutTab-overview" aria-controls="aboutPanel-overview" aria-selected="true">Overview</button>
+          <button role="tab" type="button" id="aboutTab-how" aria-controls="aboutPanel-how" aria-selected="false" tabindex="-1">How it works</button>
+          <button role="tab" type="button" id="aboutTab-demo" aria-controls="aboutPanel-demo" aria-selected="false" tabindex="-1">Demo guide</button>
+          <button role="tab" type="button" id="aboutTab-limits" aria-controls="aboutPanel-limits" aria-selected="false" tabindex="-1">Scope &amp; limits</button>
+        </div>
+
+        <div class="about-body">
+          <section id="aboutPanel-overview" role="tabpanel" aria-labelledby="aboutTab-overview">
+            <p class="about-lead">OriginChain follows one fictional luxury product, the <strong>Aurelia Prestige Renewal Serum</strong>, from raw-material receipt to the retail shelf. Every hand-off is quality-gated, and its fingerprint is recorded on a local blockchain so anyone can later check that the product is genuine and untampered.</p>
+            <div class="about-stats">
+              <div><strong>4</strong><span>Quality-gated stages</span></div>
+              <div><strong>5</strong><span>Role-based accounts</span></div>
+              <div><strong id="aboutChain">—</strong><span>Local blockchain</span></div>
+              <div><strong id="aboutBlock">—</strong><span>Current block</span></div>
+            </div>
+            <h3>Who does what</h3>
+            <ul class="about-list">
+              <li><strong>Supplier</strong>: registers raw-material batches and completes incoming QC with a Certificate of Analysis.</li>
+              <li><strong>Manufacturer</strong>: links approved materials, registers the finished batch on-chain, completes manufacturing QC, transfers to the distributor.</li>
+              <li><strong>Distributor</strong>: receiving, storage, damage and custody checks, then transfers to the retailer.</li>
+              <li><strong>Retailer</strong>: the final gate; records <em>Approved for Sale</em> or puts the batch on <em>Hold</em>.</li>
+              <li><strong>Admin</strong>: read-only oversight, audit log, issuer trust, and demo controls. Admin cannot act as a supply-chain party.</li>
+              <li><strong>Consumer</strong>: no sign-in; verifies a product code and sees only public information.</li>
+            </ul>
+          </section>
+
+          <section id="aboutPanel-how" role="tabpanel" aria-labelledby="aboutTab-how" hidden>
+            <p class="about-lead">Detailed records stay in an off-chain database; only compact hashes and custody events go on-chain. Comparing the two later reveals any tampering.</p>
+            <ol class="about-pipeline">
+              <li><span>1</span><div><strong>Sign in with a role</strong><p>Each actor gets a short-lived token. The server checks role, product custody and stage on every action.</p><code>FastAPI · Argon2 passwords · JWT · server-side RBAC</code></div></li>
+              <li><span>2</span><div><strong>Register &amp; fingerprint</strong><p>Product metadata and ingredient lineage are hashed and committed to the smart contract when the batch is registered.</p><code>Keccak-256 · OriginChain.sol on Hardhat · Web3.py</code></div></li>
+              <li><span>3</span><div><strong>Inspect each stage</strong><p>Checks come from reusable templates mapped to a versioned product specification and official source references.</p><code>Quality templates · spec V1 · source registry</code></div></li>
+              <li><span>4</span><div><strong>Attach evidence</strong><p>PDF/PNG/JPEG evidence is stored off-chain; its byte hash is recorded on-chain. Critical reports also need a trusted issuer.</p><code>5 MiB limit · integrity: Verified / Mismatch / Missing</code></div></li>
+              <li><span>5</span><div><strong>Pass the gate, hand over custody</strong><p>A stage can only be approved when every required check passes with valid evidence. Transfers re-check live status.</p><code>Approval gates · ownership transfer events</code></div></li>
+              <li><span>6</span><div><strong>Verify publicly</strong><p>The consumer view recomputes the product hash and compares it with the blockchain. Any edit shows up as <em>Suspicious</em>.</p><code>Hash comparison · evidence redaction</code></div></li>
+            </ol>
+          </section>
+
+          <section id="aboutPanel-demo" role="tabpanel" aria-labelledby="aboutTab-demo" hidden>
+            <p class="about-lead">A five-minute walkthrough. All accounts use the local demo password shown on the sign-in card.</p>
+            <ol class="about-steps">
+              <li><strong>Admin</strong>: <em>Run Demo Readiness Check</em>, then <em>Prepare Fresh Demo</em>.</li>
+              <li><strong>Supplier</strong>: <em>Demo Auto-Fill</em>, then sign out.</li>
+              <li><strong>Manufacturer</strong>: <em>Demo Auto-Fill</em>, then <em>Transfer to Distributor</em>.</li>
+              <li><strong>Distributor</strong>: <em>Demo Auto-Fill</em>, then <em>Transfer to Retailer</em>.</li>
+              <li><strong>Retailer</strong>: <em>Demo HOLD Case</em> to show a failed seal, then <em>Fix Demo Issue</em>.</li>
+              <li><strong>Verify Product</strong>: shows <em>Authentic</em> and <em>Approved for Sale</em>.</li>
+              <li><strong>Admin</strong>: <em>Demo: Tamper Local Metadata</em>.</li>
+              <li><strong>Verify Product</strong> again: now <em>Suspicious</em>, with a blockchain hash mismatch.</li>
+            </ol>
+            <p class="about-tip">Short on time? Sign in as Admin and use <em>Load Complete Presentation Demo</em> to jump straight to a fully approved product.</p>
+          </section>
+
+          <section id="aboutPanel-limits" role="tabpanel" aria-labelledby="aboutTab-limits" hidden>
+            <h3>What this is</h3>
+            <p>A local, single-machine educational demonstration built for a university project. The product, companies, inspection results and evidence are fictional. Source references (CDSCO Cosmetics Rules 2020, BIS and ISO standards) are real metadata used only to explain why evidence is requested.</p>
+            <h3>What it does not claim</h3>
+            <ul class="about-list">
+              <li>No ISO, BIS, CDSCO or FDA certification or approval.</li>
+              <li>No legal-compliance or laboratory-validity determination.</li>
+              <li>"Verified for Demo" means accepted by local workflow controls, not accredited.</li>
+            </ul>
+            <h3>Not production-ready</h3>
+            <p>Shared demo passwords, a browser-stored token, SQLite, local evidence files and Hardhat test keys are demo-only. There is no MFA, rate limiting, TLS or production key custody.</p>
+          </section>
+        </div>
+      </div>
     </dialog>
     <script src="/static/app.js"></script>
   </body>

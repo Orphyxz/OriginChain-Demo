@@ -80,6 +80,33 @@ class BlockchainClient:
             "network": self.deployment.get("network"),
         }
 
+    def deployment_readiness(self) -> dict[str, Any]:
+        """Validate that the deployment file points at a live contract on the expected chain."""
+        if not self.deployment_path.is_file():
+            raise BlockchainUnavailable(
+                f"Deployment file is missing: {self.deployment_path}"
+            )
+        self.require_ready()
+        expected_chain_id = int(self.deployment.get("chainId", 31337))
+        actual_chain_id = int(self.w3.eth.chain_id)
+        if actual_chain_id != expected_chain_id:
+            raise BlockchainUnavailable(
+                f"Chain ID mismatch: deployment expects {expected_chain_id}, RPC returned {actual_chain_id}"
+            )
+        code = self.w3.eth.get_code(Web3.to_checksum_address(self.contract_address))
+        if not code:
+            raise BlockchainUnavailable(
+                "No contract bytecode exists at the deployed OriginChain address. Restart Hardhat and redeploy."
+            )
+        # Exercise a read-only contract call so a stale ABI/address fails before a presentation.
+        self.contract.functions.verifyProduct(Web3.keccak(text="ORIGINCHAIN_READINESS_PROBE")).call()
+        return {
+            "deployment_file": str(self.deployment_path),
+            "chain_id": actual_chain_id,
+            "contract_address": self.contract_address,
+            "contract_reachable": True,
+        }
+
     def accounts(self) -> list[str]:
         self.require_ready()
         return [Web3.to_checksum_address(account) for account in self.w3.eth.accounts]

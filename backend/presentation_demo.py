@@ -1,6 +1,6 @@
 """One-click, fully populated presentation fixture for the local demo only."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from threading import Lock
 from typing import Any
 from uuid import uuid4
@@ -14,10 +14,11 @@ from .domain import (
     InspectionResult,
     SaleStatus,
     SupplyChainStage,
+    UserRole,
 )
 from .evidence import EvidenceStore
 from .metadata_hash import canonical_metadata, metadata_hash, product_key, product_metadata
-from .quality_service import QualityService
+from .quality_service import QualityGateError, QualityService
 
 
 PRODUCT_CODE = "OC-LUX-SERUM-0001"
@@ -301,7 +302,24 @@ class PresentationDemoSeeder:
         user_id: str,
         *,
         record_on_chain: bool,
-    ) -> None:
+    ) -> dict[str, Any]:
+        starting_summary = self.quality.summary(context_type, context_id, stage)
+        starting_approval = self.repository.get_stage_approval(
+            context_type.value, context_id, stage.value
+        )
+        if (
+            starting_approval
+            and starting_approval["status"] == ApprovalStatus.APPROVED.value
+            and starting_summary["eligible_for_approval"]
+        ):
+            return {
+                "already_complete": True,
+                "checks_completed": starting_summary["required_passed"],
+                "evidence_files": sum(
+                    len(check.get("evidence", [])) for check in starting_summary["checks"]
+                ),
+                "status": ApprovalStatus.APPROVED.value,
+            }
         current_results = {
             item["template_id"]: item
             for item in self.repository.quality_results(
@@ -342,6 +360,15 @@ class PresentationDemoSeeder:
                 "blockchain_block_number": receipt["block_number"],
                 "approved_by_user_id": user_id,
             })
+        completed_summary = self.quality.summary(context_type, context_id, stage)
+        return {
+            "already_complete": False,
+            "checks_completed": completed_summary["required_passed"],
+            "evidence_files": sum(
+                len(check.get("evidence", [])) for check in completed_summary["checks"]
+            ),
+            "status": completed_summary["status"],
+        }
 
     def _has_usable_evidence(
         self, result: dict[str, Any], standard: dict[str, Any]
@@ -463,4 +490,432 @@ class PresentationDemoSeeder:
             ),
             "evidence_files": len(self.repository.evidence_for_context(ContextType.PRODUCT.value, self.product_code)),
             "message": "Complete presentation demo is ready. Use Admin stage tabs or public verification to click through it.",
+        }
+
+
+class StageDemoAutomation(PresentationDemoSeeder):
+    """Role-scoped presentation shortcuts built on the normal quality service."""
+
+    def auto_fill(self, role: str, user_id: str) -> dict[str, Any]:
+        handlers = {
+            UserRole.RAW_MATERIAL_SUPPLIER.value: self._supplier,
+            UserRole.MANUFACTURER.value: self._manufacturer,
+            UserRole.DISTRIBUTOR.value: self._distributor,
+            UserRole.RETAILER.value: self._retailer,
+        }
+        handler = handlers.get(role)
+        if not handler:
+            raise PresentationDemoError(
+                "Demo Auto-Fill is available only to Supplier, Manufacturer, Distributor, and Retailer accounts."
+            )
+        with _SEED_LOCK:
+            return handler(user_id)
+
+    def retailer_hold(self, user_id: str) -> dict[str, Any]:
+        with _SEED_LOCK:
+            product = self._product_for_stage(SupplyChainStage.RETAILER)
+            self.product_code = product["product_code"]
+            self._require_chain_alignment(product)
+            standard = next(
+                (
+                    item
+                    for item in self.repository.quality_standards(
+                        SupplyChainStage.RETAILER.value
+                    )
+                    if item["code"] == "RTL-PACK"
+                ),
+                None,
+            )
+            if not standard:
+                raise PresentationDemoError(
+                    "Required demo fixture RTL-PACK is missing."
+                )
+            summary = self.quality.summary(
+                ContextType.PRODUCT,
+                self.product_code,
+                SupplyChainStage.RETAILER,
+            )
+            existing = next(
+                (check for check in summary["checks"] if check["code"] == "RTL-PACK"),
+                None,
+            )
+            if existing and existing["result"] == InspectionResult.FAIL.value:
+                return self._stage_result(
+                    product,
+                    SupplyChainStage.RETAILER,
+                    already_complete=True,
+                    action="DEMO_HOLD",
+                    message="The fictional security-seal failure is already active.",
+                )
+            self.quality.submit_result(
+                ContextType.PRODUCT,
+                self.product_code,
+                standard["id"],
+                InspectionResult.FAIL,
+                "TEST FIXTURE — FICTIONAL DEMO security seal failure for the HOLD walkthrough.",
+                f"qr_{uuid4().hex}",
+                user_id,
+            )
+            try:
+                self.quality.approve(
+                    ContextType.PRODUCT,
+                    self.product_code,
+                    SupplyChainStage.RETAILER,
+                    user_id,
+                )
+            except QualityGateError:
+                # A blocked approval is the expected service-layer outcome of this fixture.
+                pass
+            product = self.repository.get_product(self.product_code)
+            if product["final_sale_status"] != SaleStatus.HOLD.value:
+                raise PresentationDemoError(
+                    "Retail HOLD could not be established through the quality gate."
+                )
+            return self._stage_result(
+                product,
+                SupplyChainStage.RETAILER,
+                already_complete=False,
+                action="DEMO_HOLD",
+                message="Security Seal and Luxury Pack Inspection is FAIL; Retail status is HOLD.",
+            )
+
+    def _supplier(self, user_id: str) -> dict[str, Any]:
+        material = self.repository.get_raw_material_by_batch("HA-260801")
+        if not material:
+            material = self.repository.create_raw_material(
+                {
+                    "id": MATERIAL_ID,
+                    "internal_batch_id": "HA-260801",
+                    "material_name": "Hyaluronic Acid Solution",
+                    "material_category": "ACTIVE_INGREDIENT",
+                    "supplier_name": "Lumina Actives",
+                    "supplier_identifier": "LUM-DEMO",
+                    "supplier_lot_number": "LUM-HA-801",
+                    "quantity": 25,
+                    "unit": "kg",
+                    "manufacturing_date": "2026-08-01",
+                    "received_date": "2026-08-12",
+                    "expiry_retest_date": "2027-08-01",
+                    "country_source": "Demo Origin",
+                    "notes": "TEST FIXTURE — FICTIONAL DEMO supplier material.",
+                    "created_by_user_id": user_id,
+                }
+            )
+        completed = self._complete_stage(
+            ContextType.RAW_MATERIAL,
+            material["id"],
+            SupplyChainStage.RAW_MATERIAL_SUPPLIER,
+            user_id,
+            record_on_chain=False,
+        )
+        return {
+            "warning": "DEMO ONLY — FICTIONAL TEST FIXTURES",
+            "action": "DEMO_AUTO_FILL",
+            "role": UserRole.RAW_MATERIAL_SUPPLIER.value,
+            "stage": SupplyChainStage.RAW_MATERIAL_SUPPLIER.value,
+            "context_type": ContextType.RAW_MATERIAL.value,
+            "context_id": material["id"],
+            "internal_batch_id": material["internal_batch_id"],
+            **completed,
+            "steps": [
+                "Ensured the deterministic fictional raw-material batch",
+                "Recorded PASS results through QualityService",
+                "Generated integrity-checked fictional evidence",
+                "Approved the supplier quality gate",
+            ],
+            "next_action": "Sign out and continue as Manufacturer.",
+            "message": "Raw-material demo stage is approved.",
+        }
+
+    def _manufacturer(self, user_id: str) -> dict[str, Any]:
+        product = self._completed_or_current_product(SupplyChainStage.MANUFACTURER)
+        if product and product[1]:
+            self.product_code = product[0]["product_code"]
+            self._require_chain_alignment(product[0])
+            return self._stage_result(
+                product[0], SupplyChainStage.MANUFACTURER, already_complete=True,
+                message="Manufacturer demo stage is already approved.",
+            )
+        if product:
+            current = product[0]
+        else:
+            material = self._approved_material()
+            if not material:
+                raise PresentationDemoError(
+                    "Manufacturer demo stage cannot be completed. No approved raw-material batch is available. Complete the Supplier stage first."
+                )
+            self.blockchain.require_ready()
+            self.product_code = self._available_product_code()
+            current = self._register_product(material, user_id)
+        self.product_code = current["product_code"]
+        self._require_chain_alignment(current)
+        completed = self._complete_stage(
+            ContextType.PRODUCT,
+            self.product_code,
+            SupplyChainStage.MANUFACTURER,
+            user_id,
+            record_on_chain=True,
+        )
+        return self._stage_result(
+            self.repository.get_product(self.product_code),
+            SupplyChainStage.MANUFACTURER,
+            already_complete=completed["already_complete"],
+            completion=completed,
+            message="Manufacturer QC is approved. Transfer to Distributor remains a manual presentation step.",
+        )
+
+    def _distributor(self, user_id: str) -> dict[str, Any]:
+        return self._complete_product_stage(
+            SupplyChainStage.DISTRIBUTOR,
+            user_id,
+            "Distributor QC is approved. Transfer to Retailer remains a manual presentation step.",
+        )
+
+    def _retailer(self, user_id: str) -> dict[str, Any]:
+        product = self._product_for_stage(SupplyChainStage.RETAILER, allow_completed=True)
+        was_hold = product["final_sale_status"] == SaleStatus.HOLD.value
+        self.product_code = product["product_code"]
+        self._require_chain_alignment(product)
+        completed = self._complete_stage(
+            ContextType.PRODUCT,
+            self.product_code,
+            SupplyChainStage.RETAILER,
+            user_id,
+            record_on_chain=True,
+        )
+        return self._stage_result(
+            self.repository.get_product(self.product_code),
+            SupplyChainStage.RETAILER,
+            already_complete=completed["already_complete"],
+            completion=completed,
+            corrected_hold=was_hold and not completed["already_complete"],
+            message=(
+                "The fictional seal issue was corrected and the product is Approved for Sale."
+                if was_hold
+                else "Retail QC is approved and the product is Approved for Sale."
+            ),
+        )
+
+    def _complete_product_stage(
+        self, stage: SupplyChainStage, user_id: str, message: str
+    ) -> dict[str, Any]:
+        selected = self._completed_or_current_product(stage)
+        if not selected:
+            raise PresentationDemoError(
+                f"Product is not currently owned by {stage.value.replace('_', ' ').title()}. Complete the preceding transfer first."
+            )
+        product, already_progressed = selected
+        self.product_code = product["product_code"]
+        self._require_chain_alignment(product)
+        if already_progressed:
+            return self._stage_result(
+                product, stage, already_complete=True,
+                message=f"{stage.value.replace('_', ' ').title()} demo stage is already approved.",
+            )
+        completed = self._complete_stage(
+            ContextType.PRODUCT,
+            self.product_code,
+            stage,
+            user_id,
+            record_on_chain=True,
+        )
+        return self._stage_result(
+            self.repository.get_product(self.product_code),
+            stage,
+            already_complete=completed["already_complete"],
+            completion=completed,
+            message=message,
+        )
+
+    def _approved_material(self) -> dict[str, Any] | None:
+        for material in self.repository.list_raw_materials():
+            approval = self.repository.get_stage_approval(
+                ContextType.RAW_MATERIAL.value,
+                material["id"],
+                SupplyChainStage.RAW_MATERIAL_SUPPLIER.value,
+            )
+            summary = self.quality.summary(
+                ContextType.RAW_MATERIAL,
+                material["id"],
+                SupplyChainStage.RAW_MATERIAL_SUPPLIER,
+            )
+            if (
+                material["quality_status"] == ApprovalStatus.APPROVED.value
+                and approval
+                and approval["status"] == ApprovalStatus.APPROVED.value
+                and summary["eligible_for_approval"]
+            ):
+                return material
+        return None
+
+    def _register_product(self, material: dict[str, Any], user_id: str) -> dict[str, Any]:
+        specification = self.repository.get_product_specification(
+            DEFAULT_PRODUCT_SPECIFICATION_CODE
+        )
+        if (
+            not specification
+            or not specification.get("active")
+            or specification.get("status") != "APPROVED"
+        ):
+            raise PresentationDemoError(
+                "The approved presentation product specification is unavailable."
+            )
+        today = date.today()
+        if (
+            specification.get("effective_from")
+            and date.fromisoformat(specification["effective_from"]) > today
+        ):
+            raise PresentationDemoError(
+                "The approved presentation product specification is not yet effective."
+            )
+        if (
+            specification.get("effective_until")
+            and date.fromisoformat(specification["effective_until"]) < today
+        ):
+            raise PresentationDemoError(
+                "The approved presentation product specification is no longer effective."
+            )
+        metadata = product_metadata(
+            product_code=self.product_code,
+            name="Aurelia Prestige Renewal Serum",
+            brand="Aurelia Maison",
+            batch_number="APR-2026-001",
+            description="Luxury anti-aging facial serum demonstration batch",
+        )
+        material_approval = self.repository.get_stage_approval(
+            ContextType.RAW_MATERIAL.value,
+            material["id"],
+            SupplyChainStage.RAW_MATERIAL_SUPPLIER.value,
+        )
+        lineage_snapshot = [
+            {
+                "id": material["id"],
+                "batch": material["internal_batch_id"],
+                "material": material["material_name"],
+                "quality_status": material["quality_status"],
+                "quality_commitment": material_approval["commitment_hash"],
+            }
+        ]
+        key = product_key(self.product_code)
+        digest = metadata_hash(metadata)
+        registration = self.blockchain.register_product(key, digest)
+        self.repository.create_product(
+            {
+                "product_code": self.product_code,
+                "name": metadata["name"],
+                "brand": metadata["brand"],
+                "batch_number": metadata["batch_number"],
+                "description": metadata["description"],
+                "metadata_json": canonical_metadata(metadata),
+                "product_key": key,
+                "metadata_hash": digest,
+                "registration_tx_hash": registration["transaction_hash"],
+                "registration_block_number": registration["block_number"],
+                "category": "SKINCARE",
+                "subcategory": "FACIAL_SERUM",
+                "product_type": "ANTI_AGING_SERUM",
+                "manufactured_date": "2026-08-20",
+                "expiry_date": "2028-08-20",
+                "lineage_hash": metadata_hash(lineage_snapshot),
+                "registered_by_user_id": user_id,
+                "specification_code": specification["specification_code"],
+                "specification_version": specification["version"],
+                "specification_snapshot_hash": specification["snapshot_hash"],
+                "specification_assigned_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        self.repository.link_raw_materials(self.product_code, [material["id"]])
+        return self.repository.get_product(self.product_code)
+
+    def _completed_or_current_product(
+        self, stage: SupplyChainStage
+    ) -> tuple[dict[str, Any], bool] | None:
+        products = self.repository.list_products()
+        for product in products:
+            if product["current_stage"] == stage.value:
+                return product, False
+        stage_order = {
+            SupplyChainStage.MANUFACTURER.value: 1,
+            SupplyChainStage.DISTRIBUTOR.value: 2,
+            SupplyChainStage.RETAILER.value: 3,
+        }
+        for product in products:
+            approval = self.repository.get_stage_approval(
+                ContextType.PRODUCT.value, product["product_code"], stage.value
+            )
+            summary = self.quality.summary(ContextType.PRODUCT, product["product_code"], stage)
+            if (
+                approval
+                and approval["status"] == ApprovalStatus.APPROVED.value
+                and summary["eligible_for_approval"]
+                and stage_order.get(product["current_stage"], 0) > stage_order[stage.value]
+            ):
+                return product, True
+        return None
+
+    def _product_for_stage(
+        self, stage: SupplyChainStage, *, allow_completed: bool = False
+    ) -> dict[str, Any]:
+        for product in self.repository.list_products():
+            if product["current_stage"] == stage.value and (
+                allow_completed
+                or product["final_sale_status"] != SaleStatus.APPROVED_FOR_SALE.value
+            ):
+                return product
+        if allow_completed:
+            for product in self.repository.list_products():
+                if (
+                    product["current_stage"] == stage.value
+                    and product["final_sale_status"] == SaleStatus.APPROVED_FOR_SALE.value
+                ):
+                    return product
+        raise PresentationDemoError(
+            f"Product is not currently owned by {stage.value.replace('_', ' ').title()}. Complete the preceding transfer first."
+        )
+
+    def _stage_result(
+        self,
+        product: dict[str, Any],
+        stage: SupplyChainStage,
+        *,
+        already_complete: bool,
+        action: str = "DEMO_AUTO_FILL",
+        completion: dict[str, Any] | None = None,
+        corrected_hold: bool = False,
+        message: str,
+    ) -> dict[str, Any]:
+        summary = self.quality.summary(ContextType.PRODUCT, product["product_code"], stage)
+        return {
+            "warning": "DEMO ONLY — FICTIONAL TEST FIXTURES",
+            "action": action,
+            "stage": stage.value,
+            "context_type": ContextType.PRODUCT.value,
+            "context_id": product["product_code"],
+            "product_code": product["product_code"],
+            "current_stage": product["current_stage"],
+            "final_sale_status": product["final_sale_status"],
+            "already_complete": already_complete,
+            "corrected_hold": corrected_hold,
+            "checks_completed": summary["required_passed"],
+            "evidence_files": sum(
+                len(check.get("evidence", [])) for check in summary["checks"]
+            ),
+            "status": summary["status"],
+            "steps": [
+                "Recorded quality results through QualityService",
+                "Generated integrity-checked fictional evidence where required",
+                "Applied the normal stage approval gate",
+                "Committed product-stage quality and evidence hashes on-chain",
+            ],
+            "next_action": (
+                "Click Fix Demo Issue to correct the fictional seal failure."
+                if action == "DEMO_HOLD"
+                else {
+                SupplyChainStage.MANUFACTURER: "Click Transfer to Distributor.",
+                SupplyChainStage.DISTRIBUTOR: "Click Transfer to Retailer.",
+                SupplyChainStage.RETAILER: "Sign out and verify the product as Consumer.",
+                }[stage]
+            ),
+            "message": message,
+            **({"completion": completion} if completion else {}),
         }

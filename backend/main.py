@@ -1,5 +1,7 @@
 import json
+import os
 import sqlite3
+import tempfile
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 from io import BytesIO
@@ -37,11 +39,26 @@ from .domain import (
 )
 from .evidence import MAX_UPLOAD_BYTES, EvidenceStore, EvidenceValidationError
 from .metadata_hash import canonical_metadata, metadata_hash, product_key, product_metadata
-from .presentation_demo import PresentationDemoError, PresentationDemoSeeder
+from .presentation_demo import (
+    PresentationDemoError,
+    PresentationDemoSeeder,
+    StageDemoAutomation,
+)
 from .quality_service import QualityGateError, QualityService
 
 
 STATIC_DIR = Path(__file__).with_name("static")
+
+
+def _demo_mode_enabled() -> bool:
+    return os.environ.get("ORIGINCHAIN_DEMO_MODE", "1").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _require_demo_mode() -> None:
+    if not _demo_mode_enabled():
+        raise HTTPException(status_code=404, detail="Local demo automation is unavailable.")
 
 
 class RawMaterialRequest(BaseModel):
@@ -201,6 +218,208 @@ def _audit(
     )
 
 
+def _demo_progress(repo: ProductRepository, quality: QualityService, chain: Any) -> dict[str, Any]:
+    product = repo.get_product("OC-LUX-SERUM-0001")
+    if not product:
+        products = repo.list_products()
+        product = products[0] if products else None
+
+    material_approved = False
+    materials = repo.product_raw_materials(product["product_code"]) if product else repo.list_raw_materials()
+    for material in materials:
+        approval = repo.get_stage_approval(
+            ContextType.RAW_MATERIAL.value,
+            material["id"],
+            SupplyChainStage.RAW_MATERIAL_SUPPLIER.value,
+        )
+        summary = quality.summary(
+            ContextType.RAW_MATERIAL,
+            material["id"],
+            SupplyChainStage.RAW_MATERIAL_SUPPLIER,
+        )
+        if (
+            material["quality_status"] == ApprovalStatus.APPROVED.value
+            and approval
+            and approval["status"] == ApprovalStatus.APPROVED.value
+            and summary["eligible_for_approval"]
+        ):
+            material_approved = True
+            break
+
+    statuses = [("Supplier", material_approved)]
+    for stage, display in (
+        (SupplyChainStage.MANUFACTURER, "Manufacturer"),
+        (SupplyChainStage.DISTRIBUTOR, "Distributor"),
+        (SupplyChainStage.RETAILER, "Retailer"),
+    ):
+        approved = False
+        if product:
+            approval = repo.get_stage_approval(
+                ContextType.PRODUCT.value, product["product_code"], stage.value
+            )
+            summary = quality.summary(ContextType.PRODUCT, product["product_code"], stage)
+            approved = bool(
+                approval
+                and approval["status"] == ApprovalStatus.APPROVED.value
+                and summary["eligible_for_approval"]
+            )
+        statuses.append((display, approved))
+
+    consumer_ready = False
+    if product and product["final_sale_status"] == SaleStatus.APPROVED_FOR_SALE.value:
+        try:
+            chain_product = chain.get_product(product["product_key"])
+            consumer_ready = bool(
+                chain_product["exists"]
+                and metadata_hash(_metadata_from_row(product)).lower()
+                == chain_product["metadata_hash"].lower()
+            )
+        except Exception:
+            consumer_ready = False
+    statuses.append(("Consumer Verification", consumer_ready))
+
+    first_incomplete = next(
+        (index for index, (_name, complete) in enumerate(statuses) if not complete),
+        None,
+    )
+    stages = []
+    for index, (name, complete) in enumerate(statuses):
+        marker = "COMPLETE" if complete else "CURRENT" if index == first_incomplete else "UPCOMING"
+        stages.append({"name": name, "complete": complete, "marker": marker})
+    return {
+        "product_code": product["product_code"] if product else None,
+        "ready_for_consumer": consumer_ready,
+        "completed": sum(1 for _name, complete in statuses if complete),
+        "total": len(statuses),
+        "stages": stages,
+    }
+
+
+def _demo_readiness(request: Request) -> dict[str, Any]:
+    repo = request.app.state.repository
+    chain = request.app.state.blockchain
+    store = request.app.state.evidence_store
+    checks: list[dict[str, Any]] = []
+
+    def check(name: str, operation: Any, guidance: str) -> Any:
+        try:
+            detail = operation()
+            checks.append({"name": name, "ok": True, "detail": str(detail or "Available")})
+            return detail
+        except Exception as exc:
+            checks.append({"name": name, "ok": False, "detail": str(exc), "guidance": guidance})
+            return None
+
+    def database_probe() -> str:
+        with repo.connect() as connection:
+            connection.execute("SELECT 1").fetchone()
+        return "Readable and writable"
+
+    def blockchain_probe() -> dict[str, Any]:
+        status = chain.health()
+        if not status.get("blockchain_connected"):
+            raise BlockchainUnavailable("Hardhat JSON-RPC is not connected")
+        return status
+
+    check(
+        "Database",
+        database_probe,
+        "Check that the SQLite path is writable and restart FastAPI.",
+    )
+    health = check(
+        "Blockchain RPC",
+        blockchain_probe,
+        "Start the Hardhat node before presenting.",
+    )
+    check(
+        "Chain ID",
+        lambda: (
+            health["chain_id"]
+            if health and int(health.get("chain_id") or 0) == 31337
+            else (_ for _ in ()).throw(BlockchainUnavailable("Expected local chain ID 31337"))
+        ),
+        "Connect the backend to the local Hardhat chain on chain ID 31337.",
+    )
+    check(
+        "Deployment & Contract",
+        lambda: (
+            chain.deployment_readiness()
+            if hasattr(chain, "deployment_readiness")
+            else (chain.require_ready(), chain.get_product(product_key("ORIGINCHAIN_READINESS_PROBE")), "Injected contract adapter reachable")[-1]
+        ),
+        "Restart Hardhat, redeploy OriginChain, then restart FastAPI.",
+    )
+    check(
+        "Authentication",
+        lambda: (
+            "5 seeded demo users"
+            if all(repo.get_user_by_username(name) for name in ("supplier", "manufacturer", "distributor", "retailer", "admin"))
+            else (_ for _ in ()).throw(RuntimeError("One or more seeded users are missing"))
+        ),
+        "Restart FastAPI to reseed the local demo users.",
+    )
+    check(
+        "Quality Standards",
+        lambda: (
+            f"{sum(len(repo.quality_standards(stage.value)) for stage in SupplyChainStage)} active checks"
+            if all(repo.quality_standards(stage.value) for stage in SupplyChainStage)
+            else (_ for _ in ()).throw(RuntimeError("A stage has no active quality standards"))
+        ),
+        "Reinitialize the demo database reference data.",
+    )
+    check(
+        "Quality Sources",
+        lambda: f"{len(repo.quality_sources())} active sources" if repo.quality_sources() else (_ for _ in ()).throw(RuntimeError("No active quality sources")),
+        "Reinitialize the quality-source registry.",
+    )
+    check(
+        "Product Specification",
+        lambda: (
+            repo.get_product_specification(DEFAULT_PRODUCT_SPECIFICATION_CODE)["version"]
+            if repo.get_product_specification(DEFAULT_PRODUCT_SPECIFICATION_CODE)
+            else (_ for _ in ()).throw(RuntimeError("Default product specification is missing"))
+        ),
+        "Reinitialize the seeded product specification.",
+    )
+    check(
+        "Evidence Issuers",
+        lambda: f"{len(repo.evidence_issuers())} active issuers" if repo.evidence_issuers() else (_ for _ in ()).throw(RuntimeError("No active evidence issuers")),
+        "Reinitialize the evidence-issuer registry.",
+    )
+
+    def evidence_storage_probe() -> str:
+        store.root.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(prefix="originchain-readiness-", dir=store.root, delete=True) as handle:
+            handle.write(b"TEST FIXTURE - READINESS")
+            handle.flush()
+            if not Path(handle.name).read_bytes():
+                raise OSError("Evidence probe could not be read")
+        return "Writable; fixture create/read/delete passed"
+
+    check(
+        "Evidence Storage",
+        evidence_storage_probe,
+        "Check ORIGINCHAIN_UPLOAD_DIR permissions.",
+    )
+    check(
+        "Demo Auto-Fill",
+        lambda: "Enabled" if _demo_mode_enabled() else (_ for _ in ()).throw(RuntimeError("ORIGINCHAIN_DEMO_MODE is disabled")),
+        "Set ORIGINCHAIN_DEMO_MODE=1 and restart FastAPI for the local presentation.",
+    )
+    check(
+        "Consumer Verification",
+        lambda: "Route available" if any(getattr(route, "path", None) == "/api/verify/{product_code}" for route in request.app.routes) else (_ for _ in ()).throw(RuntimeError("Consumer verification route is missing")),
+        "Restore the consumer verification API route.",
+    )
+    ready = all(item["ok"] for item in checks)
+    return {
+        "status": "READY" if ready else "NOT_READY",
+        "ready": ready,
+        "checks": checks,
+        "blocking_issues": [item["guidance"] for item in checks if not item["ok"]],
+    }
+
+
 def create_app(
     repository: ProductRepository | None = None,
     blockchain: BlockchainClient | None = None,
@@ -274,6 +493,7 @@ def create_app(
     def catalog() -> dict[str, Any]:
         return {
             "notice": "Fictional educational demonstration data only.",
+            "demo_mode": _demo_mode_enabled(),
             "product": {
                 "brand": "Aurelia Maison",
                 "name": "Aurelia Prestige Renewal Serum",
@@ -1071,11 +1291,41 @@ def create_app(
             },
         }
 
+    @app.get("/api/demo/progress")
+    def demo_progress(
+        request: Request,
+        _user: dict[str, Any] = Depends(authenticated_user),
+    ) -> dict[str, Any]:
+        _require_demo_mode()
+        return _demo_progress(
+            request.app.state.repository,
+            request.app.state.quality,
+            request.app.state.blockchain,
+        )
+
+    @app.get("/api/demo/readiness")
+    def demo_readiness(
+        request: Request,
+        user: dict[str, Any] = Depends(require_roles(UserRole.ADMIN)),
+    ) -> dict[str, Any]:
+        result = _demo_readiness(request)
+        _audit(
+            request.app.state.repository,
+            user,
+            "DEMO_READINESS_CHECKED",
+            "DEMO",
+            "local",
+            result="SUCCESS" if result["ready"] else "FAILED",
+            metadata={"status": result["status"]},
+        )
+        return result
+
     @app.post("/api/demo/tamper/{product_code}")
     def tamper_product(
         product_code: str, request: Request,
         user: dict[str, Any] = Depends(require_roles(UserRole.ADMIN)),
     ) -> dict[str, Any]:
+        _require_demo_mode()
         product = request.app.state.repository.tamper_product(product_code.strip())
         if not product:
             raise HTTPException(status_code=404, detail="Product not found in local database")
@@ -1095,6 +1345,7 @@ def create_app(
         request: Request,
         user: dict[str, Any] = Depends(require_roles(UserRole.ADMIN)),
     ) -> dict[str, Any]:
+        _require_demo_mode()
         request.app.state.repository.init_db()
         request.app.state.repository.reset_demo()
         removed = request.app.state.evidence_store.clear_demo_files()
@@ -1104,15 +1355,114 @@ def create_app(
         )
         return {
             "warning": "DEMO ONLY - NOT PRODUCTION",
-            "message": "Local SQLite data and demo uploads were cleared. Blockchain state is unchanged.",
+            "message": "Fresh local demo prepared: SQLite operational records and demo uploads were cleared. Blockchain state is unchanged; the running Hardhat node was not reset.",
             "uploads_removed": removed,
+            "blockchain_reset": False,
+            "fresh_chain_steps": [
+                "Restart the Hardhat node",
+                "Redeploy the OriginChain contract",
+                "Click Prepare Fresh Demo",
+            ],
         }
+
+    @app.post("/api/demo/auto-fill")
+    def demo_auto_fill(
+        request: Request,
+        user: dict[str, Any] = Depends(authenticated_user),
+    ) -> dict[str, Any]:
+        _require_demo_mode()
+        allowed = {
+            UserRole.RAW_MATERIAL_SUPPLIER.value,
+            UserRole.MANUFACTURER.value,
+            UserRole.DISTRIBUTOR.value,
+            UserRole.RETAILER.value,
+        }
+        if user["role"] not in allowed:
+            raise HTTPException(
+                status_code=403,
+                detail="Demo Auto-Fill is restricted to the authenticated operational stage actor.",
+            )
+        repo = request.app.state.repository
+        _audit(
+            repo, user, "DEMO_AUTO_FILL_STARTED", "QUALITY_STAGE", user["role"],
+            metadata={"demo_only": True},
+        )
+        try:
+            result = StageDemoAutomation(
+                repo,
+                request.app.state.blockchain,
+                request.app.state.evidence_store,
+            ).auto_fill(user["role"], user["id"])
+        except BlockchainUnavailable as exc:
+            _audit(repo, user, "DEMO_AUTO_FILL_FAILED", "QUALITY_STAGE", user["role"], result="FAILED", metadata={"reason": str(exc)})
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except PresentationDemoError as exc:
+            _audit(repo, user, "DEMO_AUTO_FILL_FAILED", "QUALITY_STAGE", user["role"], result="FAILED", metadata={"reason": str(exc)})
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (sqlite3.IntegrityError, ValueError) as exc:
+            _audit(repo, user, "DEMO_AUTO_FILL_FAILED", "QUALITY_STAGE", user["role"], result="FAILED", metadata={"reason": str(exc)})
+            raise HTTPException(status_code=409, detail=f"Demo Auto-Fill could not complete: {exc}") from exc
+        except Exception as exc:
+            _audit(repo, user, "DEMO_AUTO_FILL_FAILED", "QUALITY_STAGE", user["role"], result="FAILED", metadata={"reason": str(exc)})
+            raise HTTPException(status_code=502, detail=f"Demo Auto-Fill failed: {exc}") from exc
+        _audit(
+            repo,
+            user,
+            "DEMO_AUTO_FILL_COMPLETED",
+            "QUALITY_STAGE",
+            result["context_id"],
+            metadata={
+                "stage": result["stage"],
+                "already_complete": result["already_complete"],
+                "checks_completed": result["checks_completed"],
+                "evidence_files": result["evidence_files"],
+            },
+        )
+        if result.get("corrected_hold"):
+            _audit(
+                repo, user, "DEMO_HOLD_CORRECTED", "PRODUCT", result["product_code"],
+                metadata={"stage": SupplyChainStage.RETAILER.value},
+            )
+        return result
+
+    @app.post("/api/demo/retailer-hold")
+    def demo_retailer_hold(
+        request: Request,
+        user: dict[str, Any] = Depends(require_roles(UserRole.RETAILER)),
+    ) -> dict[str, Any]:
+        _require_demo_mode()
+        repo = request.app.state.repository
+        _audit(
+            repo, user, "DEMO_HOLD_STARTED", "QUALITY_STAGE", SupplyChainStage.RETAILER.value,
+            metadata={"demo_only": True},
+        )
+        try:
+            result = StageDemoAutomation(
+                repo,
+                request.app.state.blockchain,
+                request.app.state.evidence_store,
+            ).retailer_hold(user["id"])
+        except BlockchainUnavailable as exc:
+            _audit(repo, user, "DEMO_HOLD_FAILED", "QUALITY_STAGE", SupplyChainStage.RETAILER.value, result="FAILED", metadata={"reason": str(exc)})
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except PresentationDemoError as exc:
+            _audit(repo, user, "DEMO_HOLD_FAILED", "QUALITY_STAGE", SupplyChainStage.RETAILER.value, result="FAILED", metadata={"reason": str(exc)})
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            _audit(repo, user, "DEMO_HOLD_FAILED", "QUALITY_STAGE", SupplyChainStage.RETAILER.value, result="FAILED", metadata={"reason": str(exc)})
+            raise HTTPException(status_code=502, detail=f"Demo HOLD could not be created: {exc}") from exc
+        _audit(
+            repo, user, "DEMO_HOLD_CREATED", "PRODUCT", result["product_code"],
+            metadata={"already_active": result["already_complete"], "failed_check": "RTL-PACK"},
+        )
+        return result
 
     @app.post("/api/demo/presentation-seed")
     def seed_presentation_demo(
         request: Request,
         user: dict[str, Any] = Depends(require_roles(UserRole.ADMIN)),
     ) -> dict[str, Any]:
+        _require_demo_mode()
         try:
             result = PresentationDemoSeeder(
                 request.app.state.repository,

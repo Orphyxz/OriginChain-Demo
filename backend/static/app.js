@@ -3,6 +3,7 @@ const state = {
   contextId: null, activeSummary: null, verification: null, user: null,
   qualitySources: [], qualityProfiles: [], productSpecifications: [], evidenceIssuers: [],
   sourceReviews: [], changeRecords: [],
+  demoMode: false, demoAction: null, health: null,
   token: localStorage.getItem("originchain_demo_access_token") || null,
 };
 const $ = (selector) => document.querySelector(selector);
@@ -58,7 +59,7 @@ function showFeedback(title, detail = "", type = "error", items = []) {
   const box = $("#notice");
   box.setAttribute("role", type === "error" ? "alert" : "status");
   box.className = `notice ${type}`;
-  box.innerHTML = `<strong>${esc(title)}</strong>${detail ? `<span>${esc(detail)}</span>` : ""}${items.length ? `<ul>${items.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}`;
+  $("#noticeBody").innerHTML = `<strong>${esc(title)}</strong>${detail ? `<span>${esc(detail)}</span>` : ""}${items.length ? `<ul>${items.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}`;
   clearTimeout(showFeedback.timer);
   showFeedback.timer = setTimeout(() => box.classList.add("hidden"), type === "error" ? 10000 : 6500);
 }
@@ -89,13 +90,14 @@ function parseApiError(body, status) {
 
 async function api(path, options = {}) {
   let response;
+  const requestToken = state.token;
   const headers = new Headers(options.headers || {});
-  if (state.token) headers.set("Authorization", `Bearer ${state.token}`);
+  if (requestToken) headers.set("Authorization", `Bearer ${requestToken}`);
   try { response = await fetch(path, { ...options, headers }); }
   catch (_) { throw new ApiError("Application is unavailable", "Check that the FastAPI server is running.", [], 0); }
   const contentType = response.headers.get("content-type") || "";
   const body = contentType.includes("json") ? await response.json() : await response.text();
-  if (response.status === 401 && path !== "/api/auth/login") showLoggedOut();
+  if (response.status === 401 && path !== "/api/auth/login" && state.token === requestToken) showLoggedOut();
   if (!response.ok) throw parseApiError(body, response.status);
   return body;
 }
@@ -147,6 +149,8 @@ function showLoggedOut(message = "") {
   $("#operationalApp").hidden = true;
   $("#accountPanel").classList.add("hidden");
   $("#admin").classList.add("hidden");
+  $("#demoTools").classList.add("hidden");
+  $("#demoProgress").classList.add("hidden");
   $$(".operational-nav, .admin-nav").forEach((item) => item.classList.add("hidden"));
   document.body.removeAttribute("data-role");
   if (message) showFeedback("Session ended", message, "warning");
@@ -189,6 +193,22 @@ function applyRoleUI() {
   $('[data-nav-role="manufacturing"]').classList.toggle("hidden", !showManufacturing);
   $("#admin").classList.toggle("hidden", role !== "ADMIN");
   $(".admin-nav").classList.toggle("hidden", role !== "ADMIN");
+  const operationalDemoRole = ["RAW_MATERIAL_SUPPLIER", "MANUFACTURER", "DISTRIBUTOR", "RETAILER"].includes(role);
+  $("#demoTools").classList.toggle("hidden", !state.demoMode || !operationalDemoRole);
+  $$(".demo-only").forEach((item) => item.classList.toggle("hidden", !state.demoMode));
+  if (state.demoMode && operationalDemoRole) {
+    const copy = {
+      RAW_MATERIAL_SUPPLIER: ["Supplier Demo Auto-Fill", "Creates or resumes the fictional HA-260801 batch, completes its required QC/evidence, and approves it."],
+      MANUFACTURER: ["Manufacturer Demo Auto-Fill", "Uses an approved raw material, registers the serum and specification on-chain, then completes Manufacturer QC. Transfer stays manual."],
+      DISTRIBUTOR: ["Distributor Demo Auto-Fill", "Completes receiving, custody, storage, damage, and release checks. Transfer stays manual."],
+      RETAILER: ["Retailer Demo Auto-Fill", "Completes or corrects Retail QC and records Approved for Sale. Use Demo HOLD Case first to show the blocker."],
+    }[role];
+    $("#demoToolTitle").textContent = copy[0];
+    $("#demoToolCopy").textContent = copy[1];
+    $("#demoHoldButton").classList.toggle("hidden", role !== "RETAILER");
+    $("#demoAutofillButton").textContent = role === "RETAILER" && currentProduct()?.final_sale_status === "HOLD"
+      ? "Fix Demo Issue" : "Demo Auto-Fill";
+  }
   $$(".stage-tabs button").forEach((button) => {
     button.hidden = !canViewStage(button.dataset.stage);
   });
@@ -206,6 +226,11 @@ async function beginSession(token, user) {
     await selectQuality(stage, "RAW_MATERIAL", state.materials[0].id);
   } else if (stage && currentProduct()) {
     await selectQuality(stage, "PRODUCT", currentProduct().product_code);
+  } else if (user.role === "ADMIN" && currentProduct()) {
+    const product = currentProduct();
+    await selectQuality(STAGES.includes(product.current_stage) ? product.current_stage : "RETAILER", "PRODUCT", product.product_code);
+  } else if (user.role === "ADMIN" && state.materials.length) {
+    await selectQuality("RAW_MATERIAL_SUPPLIER", "RAW_MATERIAL", state.materials[0].id);
   }
   if (user.role === "ADMIN") { renderQualityReferences(); await refreshAudit(); }
 }
@@ -290,11 +315,13 @@ function eligibleMaterials() {
 async function refreshHealth() {
   try {
     const health = await api("/api/health");
+    state.health = health;
     $("#chainPill").classList.toggle("online", health.blockchain_connected);
     $("#chainPill").lastChild.textContent = health.blockchain_connected ? " Connected" : " Offline";
     $("#networkName").textContent = health.blockchain_connected
       ? `${label(health.network || "Hardhat Local")} · block ${health.current_block}` : "Hardhat offline";
   } catch (error) {
+    state.health = null;
     $("#chainPill").classList.remove("online");
     $("#chainPill").lastChild.textContent = " Offline";
     $("#networkName").textContent = "API unavailable";
@@ -379,6 +406,16 @@ function updateControls() {
     button.disabled = button.dataset.stage === "RAW_MATERIAL_SUPPLIER" ? !state.materials.length : !product;
   });
   $("#registerMaterialButton").disabled = state.user?.role !== "RAW_MATERIAL_SUPPLIER";
+  const autoFillButton = $("#demoAutofillButton");
+  if (autoFillButton) {
+    autoFillButton.disabled = !state.demoMode || !["RAW_MATERIAL_SUPPLIER", "MANUFACTURER", "DISTRIBUTOR", "RETAILER"].includes(state.user?.role);
+    autoFillButton.textContent = state.user?.role === "RETAILER" && product?.final_sale_status === "HOLD"
+      ? "Fix Demo Issue" : "Demo Auto-Fill";
+  }
+  const holdButton = $("#demoHoldButton");
+  if (holdButton) {
+    holdButton.disabled = !state.demoMode || state.user?.role !== "RETAILER" || product?.current_stage !== "RETAILER";
+  }
   const presentationButton = $("#loadPresentationButton");
   if (presentationButton) {
     const presentationComplete = product?.final_sale_status === "APPROVED_FOR_SALE";
@@ -418,7 +455,8 @@ function updateControls() {
 
 $$('.demo-account').forEach((button) => button.addEventListener("click", () => {
   $("#loginUsername").value = button.dataset.username;
-  $("#loginPassword").focus();
+  $("#loginPassword").value = "OriginDemo2026!";
+  $("#loginButton").focus();
 }));
 
 $("#loginForm").addEventListener("submit", (event) => {
@@ -743,8 +781,65 @@ $("#verifyForm").addEventListener("submit", (event) => {
 });
 
 function openDialog(dialog, fallbackMessage, confirmed) {
-  if (typeof dialog.showModal === "function") dialog.showModal();
+  if (typeof dialog.showModal === "function") {
+    dialog.returnValue = "";
+    dialog.showModal();
+  }
   else if (window.confirm(fallbackMessage)) confirmed();
+}
+
+function requestDemoAction(action) {
+  state.demoAction = action;
+  const hold = action === "hold";
+  $("#demoActionTitle").textContent = hold ? "Create the Demo HOLD case?" : "Run Demo Auto-Fill?";
+  $("#demoActionCopy").textContent = hold
+    ? "This records a fictional Security Seal and Luxury Pack failure through the normal Retail quality service. The product will move to HOLD until corrected."
+    : "This creates fictional PASS results and safe evidence through the normal quality and approval services for the signed-in stage actor. Transfers remain manual.";
+  $("#confirmDemoAction").textContent = hold ? "Create Demo HOLD" : "Run Demo Auto-Fill";
+  openDialog(
+    $("#demoActionDialog"),
+    hold ? "Create the fictional Retail HOLD case?" : "Run Demo Auto-Fill for this stage?",
+    () => runDemoAction(action),
+  );
+}
+
+$("#demoAutofillButton").addEventListener("click", () => requestDemoAction("auto-fill"));
+$("#demoHoldButton").addEventListener("click", () => requestDemoAction("hold"));
+$("#demoActionDialog").addEventListener("close", () => {
+  const action = state.demoAction;
+  state.demoAction = null;
+  if ($("#demoActionDialog").returnValue === "confirm" && action) runDemoAction(action);
+});
+
+async function runDemoAction(action) {
+  const hold = action === "hold";
+  const button = hold ? $("#demoHoldButton") : $("#demoAutofillButton");
+  await withButton(button, hold ? "Creating Demo HOLD…" : "Completing demo stage…", async () => {
+    try {
+      const result = await api(
+        hold ? "/api/demo/retailer-hold" : "/api/demo/auto-fill",
+        { method: "POST" },
+      );
+      await refreshHealth();
+      await Promise.all([refreshRecords(), refreshQualityReferences()]);
+      await refreshDashboard();
+      if (result.context_type === "RAW_MATERIAL") {
+        await selectQuality(result.stage, "RAW_MATERIAL", result.context_id);
+      } else {
+        $("#verifyCode").value = result.product_code;
+        await selectQuality(result.stage, "PRODUCT", result.product_code);
+      }
+      showFeedback(
+        hold ? "Demo HOLD created" : result.corrected_hold ? "Demo issue corrected" : "Demo stage complete",
+        `${result.message} ${result.next_action || ""}`.trim(),
+        hold ? "warning" : "success",
+        result.steps || [],
+      );
+      $("#operations").scrollIntoView({ behavior: "smooth" });
+    } catch (error) {
+      reportError(error, hold ? "Demo HOLD could not be created" : "Demo Auto-Fill could not complete");
+    }
+  });
 }
 
 $("#tamperButton").addEventListener("click", () => openDialog(
@@ -826,7 +921,27 @@ async function refreshDashboard() {
       : currentStage === "MANUFACTURER" ? "Register or release the finished batch"
       : currentStage === "DISTRIBUTOR" ? "Complete receiving and logistics QC"
       : "Register and approve supplier batches";
+    await refreshDemoProgress();
   } catch (error) { reportError(error, "Dashboard state could not be refreshed"); }
+}
+
+async function refreshDemoProgress() {
+  const panel = $("#demoProgress");
+  if (!state.demoMode || !state.user) {
+    panel.classList.add("hidden");
+    return;
+  }
+  try {
+    const progress = await api("/api/demo/progress");
+    panel.classList.remove("hidden");
+    panel.innerHTML = `<strong>Demo Progress</strong><div>${progress.stages.map((item) => {
+      const symbol = item.complete ? "✓" : item.marker === "CURRENT" ? "→" : "○";
+      return `<span class="${item.complete ? "complete" : item.marker.toLowerCase()}"><b>${symbol}</b> ${esc(item.name)}</span>`;
+    }).join("")}</div>`;
+  } catch (error) {
+    panel.classList.add("hidden");
+    if (error.status !== 404) reportError(error, "Demo progress unavailable");
+  }
 }
 
 $("#refreshDashboard").addEventListener("click", (event) => withButton(event.currentTarget, "Refreshing…", async () => {
@@ -862,6 +977,23 @@ $("#refreshAudit").addEventListener("click", (event) => withButton(
   event.currentTarget, "Refreshing…", refreshAudit,
 ));
 
+$("#readinessButton").addEventListener("click", (event) => withButton(
+  event.currentTarget, "Checking demo stack…", async () => {
+    const panel = $("#readinessResult");
+    try {
+      const result = await api("/api/demo/readiness");
+      panel.className = `readiness-result ${result.ready ? "ready" : "not-ready"}`;
+      panel.innerHTML = `<strong>${esc(result.status.replace("_", " "))}</strong><ul>${result.checks.map((item) => `<li class="${item.ok ? "pass" : "fail"}"><b>${item.ok ? "✓" : "×"}</b> ${esc(item.name)}<small>${esc(item.detail)}</small></li>`).join("")}</ul>${result.blocking_issues.length ? `<p>${result.blocking_issues.map(esc).join(" ")}</p>` : ""}`;
+      showFeedback(
+        result.ready ? "Demo is ready" : "Demo is not ready",
+        result.ready ? "Every presentation prerequisite passed." : "Review the failed readiness items before presenting.",
+        result.ready ? "success" : "error",
+      );
+      await refreshAudit();
+    } catch (error) { reportError(error, "Demo readiness check failed"); }
+  },
+));
+
 $("#loadPresentationButton").addEventListener("click", (event) => withButton(
   event.currentTarget, "Creating the complete demo…", async () => {
     try {
@@ -883,7 +1015,7 @@ $("#loadPresentationButton").addEventListener("click", (event) => withButton(
 ));
 
 $("#resetButton").addEventListener("click", () => openDialog(
-  $("#resetDialog"), "Clear local database and uploads? The blockchain is not reset.", runReset,
+  $("#resetDialog"), "Prepare fresh local data? The running blockchain is not reset.", runReset,
 ));
 $("#resetDialog").addEventListener("close", () => {
   if ($("#resetDialog").returnValue === "confirm") runReset();
@@ -904,14 +1036,57 @@ async function runReset() {
       $("#consumerResult").innerHTML = '<span class="seal">OC</span><p>Enter the product code to view the consumer-safe record.</p>';
       await refreshDashboard();
       await refreshAudit();
-      showFeedback("Local demo data reset", result.message, "warning");
+      showFeedback("Fresh local demo prepared", result.message, "warning", result.fresh_chain_steps || []);
     } catch (error) { reportError(error, "Local reset failed"); }
   });
 }
 
+$("#noticeClose").addEventListener("click", () => {
+  clearTimeout(showFeedback.timer);
+  $("#notice").classList.add("hidden");
+});
+
+function selectAboutTab(tab) {
+  $$(".about-tabs [role=tab]").forEach((item) => {
+    const active = item === tab;
+    item.setAttribute("aria-selected", String(active));
+    item.tabIndex = active ? 0 : -1;
+    $(`#${item.getAttribute("aria-controls")}`).hidden = !active;
+  });
+  $(".about-body").scrollTop = 0;
+}
+
+function renderAboutStats() {
+  const health = state.health;
+  $("#aboutChain").textContent = health?.blockchain_connected ? "Online" : "Offline";
+  $("#aboutChain").className = health?.blockchain_connected ? "online" : "offline";
+  $("#aboutBlock").textContent = health?.blockchain_connected ? `#${health.current_block}` : "—";
+}
+
+$("#aboutButton").addEventListener("click", () => {
+  renderAboutStats();
+  $("#aboutDialog").showModal();
+  refreshHealth().then(renderAboutStats);
+});
+$("#aboutClose").addEventListener("click", () => $("#aboutDialog").close());
+$("#aboutDialog").addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) event.currentTarget.close();
+});
+$$(".about-tabs [role=tab]").forEach((tab, index, tabs) => {
+  tab.addEventListener("click", () => selectAboutTab(tab));
+  tab.addEventListener("keydown", (event) => {
+    const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+    if (!step) return;
+    const next = tabs[(index + step + tabs.length) % tabs.length];
+    selectAboutTab(next); next.focus();
+  });
+});
+
 (async function boot() {
   $("#journey").innerHTML = '<div class="empty-state">Loading current supply-chain state…</div>';
   try {
+    const catalog = await api("/api/demo/catalog");
+    state.demoMode = Boolean(catalog.demo_mode);
     await refreshHealth();
     if (state.token) {
       const user = await api("/api/auth/me");
