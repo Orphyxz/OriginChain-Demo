@@ -1,9 +1,11 @@
 """Run against a fresh local Hardhat deployment and a running FastAPI server."""
 
+import os
+
 import httpx
 
 
-BASE_URL = "http://127.0.0.1:8000"
+BASE_URL = os.environ.get("ORIGINCHAIN_API_URL", "http://127.0.0.1:8000")
 DEMO_PASSWORD = "OriginDemo2026!"
 
 
@@ -156,7 +158,7 @@ def main() -> None:
         assert blocked_approval.status_code == 409
         blocked_detail = blocked_approval.json()["detail"]
         assert any(
-            "Security Seal" in reason and "failed" in reason
+            "Seal and packaging" in reason and "failed" in reason
             for reason in blocked_detail["blocking_reasons"]
         )
 

@@ -620,6 +620,15 @@ class ProductRepository:
     def get_user_by_username(self, username: str) -> dict[str, Any] | None:
         return self._one("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username.strip(),))
 
+    def change_version(self) -> int:
+        """Newest audit id that reflects a data change; lets clients detect updates with one cheap query."""
+        row = self._one(
+            "SELECT COALESCE(MAX(id), 0) AS version FROM audit_events "
+            "WHERE action NOT IN ('LOGIN_SUCCESS', 'DEMO_READINESS_CHECKED')",
+            (),
+        )
+        return int(row["version"]) if row else 0
+
     def add_audit_event(self, event: dict[str, Any]) -> dict[str, Any]:
         values = {
             **event,
@@ -684,7 +693,8 @@ class ProductRepository:
                     package_component = excluded.package_component,
                     expected_visual_characteristic = excluded.expected_visual_characteristic,
                     defect_categories_json = excluded.defect_categories_json,
-                    trusted_issuer_required = excluded.trusted_issuer_required
+                    trusted_issuer_required = excluded.trusted_issuer_required,
+                    active = 1
                 """,
                 (
                     code, "OriginChain Demo Quality Standard", item["check_name"], stage.value,
@@ -710,6 +720,21 @@ class ProductRepository:
                     """,
                     (standard_id, source_code, item["requirement_rationale"]),
                 )
+
+        # Retire checks dropped from the catalogue so older databases show the current five per stage.
+        current_codes = [item["code"] for item in DEMO_QUALITY_STANDARDS]
+        placeholders = ", ".join("?" for _ in current_codes)
+        connection.execute(
+            f"UPDATE quality_standards SET active = 0 WHERE code NOT IN ({placeholders})", current_codes
+        )
+        connection.execute(
+            f"""
+            DELETE FROM quality_profile_requirements WHERE standard_id IN (
+                SELECT id FROM quality_standards WHERE code NOT IN ({placeholders})
+            )
+            """,
+            current_codes,
+        )
 
     def _seed_profile(self, connection: sqlite3.Connection) -> None:
         connection.execute(

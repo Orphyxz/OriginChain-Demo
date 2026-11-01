@@ -142,7 +142,7 @@ def test_role_by_role_demo_auto_fill_hold_correction_and_privacy(workflow, monke
     ).json()
     seal = next(check for check in retail_summary["checks"] if check["code"] == "RTL-PACK")
     assert seal["result"] == "FAIL"
-    assert any("Security Seal" in reason for reason in retail_summary["blocking_reasons"])
+    assert any("Seal and packaging" in reason for reason in retail_summary["blocking_reasons"])
 
     correction = client.post(
         "/api/demo/auto-fill", headers=auth_headers(client, "retailer")

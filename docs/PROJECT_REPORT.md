@@ -67,7 +67,7 @@ Events: `ProductRegistered`, `OwnershipTransferred`, `QualityStageRecorded`, `Ev
 
 - **`main.py`**: FastAPI app with roughly 40 routes (auth, records, quality, evidence, transfers, verification, admin and demo).
 - **`database.py`**: SQLite schema (20 tables) and repositories. Includes database guards that stop an assigned product specification from being edited.
-- **`domain.py`**: Roles, statuses, stage definitions and the seeded quality templates (24 checks: 5 supplier, 8 manufacturer, 5 distributor, 6 retail).
+- **`domain.py`**: Roles, statuses, stage definitions and the seeded quality templates: 20 checks, five per stage (2 inspections, 2 certificates, 1 final review).
 - **`quality_service.py`**: Evaluates a stage. It decides whether every required check has passed, has valid evidence and, where needed, a trusted issuer.
 - **`auth.py`**: Argon2 password hashing, 30-minute JWTs, and per-request reloading of the user to confirm they are still active and still hold the same role.
 - **`evidence.py`**: Accepts PDF/PNG/JPEG files up to 5 MiB, stores them under generated names and hashes the bytes.
@@ -75,17 +75,28 @@ Events: `ProductRegistered`, `OwnershipTransferred`, `QualityStageRecorded`, `Ev
 
 ### 4.3 Frontend: `backend/static/`
 
-A single page (`index.html`, `app.js`, `styles.css`) served by FastAPI. It adapts to the signed-in role: each actor sees only their sections and actions. It includes a public **Verify Product** panel, an Admin audit and governance view, presenter shortcuts, and an **About** dialog that explains the project inside the app.
+A single-page app (`index.html`, `app.js`, `styles.css`) served by FastAPI, with five views (Overview, Batches, Quality, Verify, Admin) that each fit one laptop screen. It adapts to the signed-in role, supports dark and light themes with a glass design, and keeps every demo shortcut in a floating ✦ button that also switches roles in one tap. An **About** dialog explains the project inside the app.
 
 ## 5. How it works, end to end
 
-1. **Supplier** registers a raw-material batch (for example Hyaluronic Acid `HA-260801`) and completes 5 checks. One check requires a Certificate of Analysis from a *Trusted Demo* issuer. The supplier then approves the stage.
-2. **Manufacturer** links only approved, unexpired materials and registers the serum batch against the approved product specification. The backend hashes the product metadata and calls `registerProduct` on-chain. The manufacturer completes 8 checks, including microbiology and preservation-efficacy evidence, approves the stage, and transfers custody to the distributor (`transferOwnership`).
-3. **Distributor** completes 5 receiving, storage, damage and custody checks, approves the stage, and transfers to the retailer.
-4. **Retailer** completes 6 final checks. A failed mandatory check (such as a broken security seal) puts the batch on **HOLD**. After correction and approval it becomes **Approved for Sale**.
+1. **Supplier** registers a raw-material batch (for example Hyaluronic Acid `HA-260801`) and completes its 5 checks. One certificate is a Certificate of Analysis from a *Trusted Demo* issuer. The supplier then approves the stage.
+2. **Manufacturer** links only approved, unexpired materials and registers the serum batch against the approved product specification. The backend hashes the product metadata and calls `registerProduct` on-chain. The manufacturer completes 5 checks, including microbiology and preservation-test certificates, approves the stage, and transfers custody to the distributor (`transferOwnership`).
+3. **Distributor** completes 5 checks (receipt, damage, shipping record, storage log, release), approves the stage, and transfers to the retailer.
+4. **Retailer** completes 5 final checks. A failed mandatory check (such as *Seal and packaging*) puts the batch on **HOLD**. After correction and approval it becomes **Approved for Sale**.
 5. At every approval, the stage snapshot hash and the hash of each evidence file are committed on-chain.
 6. **Consumer** enters the product code. The server recomputes the metadata hash from the database, compares it with the on-chain value, and returns authenticity, the four-stage quality journey, provenance by role, and any evidence marked public. Internal notes and files are never exposed.
 7. **Tamper demo:** Admin edits the local product record. Verification now finds a hash mismatch and reports **Suspicious**.
+
+### Five checks per stage
+
+Every stage has the same structure, so a non-technical reader understands it at a glance:
+
+| Stage | Check ×2 | Certificate ×2 | Final review |
+|---|---|---|---|
+| Raw materials | Material identity · Container condition | Certificate of Analysis · Ingredient safety review | Supplier release |
+| Manufacturing | Product appearance · Bottle, seal and label | Microbiology report · Preservation test report | Batch release |
+| Distribution | Shipment received · Damage inspection | Shipping record · Storage log | Release to retailer |
+| Retail | Seal and packaging · Label and expiry date | Goods receipt note · Retail inspection report | Approve for sale |
 
 ### Quality-gate rules
 
@@ -124,6 +135,7 @@ Results from the handover review (5 October 2026), all on a fresh Hardhat chain:
 | Live revoked-issuer drill | Passed |
 | Headless-Chrome UI smoke (`ui_smoke_cdp.js`) | Passed |
 | Manual UI review (desktop 1440px and mobile 375px) | Passed after fixes listed in §10 |
+| Redesign (18 Oct): backend tests, UI smoke and full five-role UI walkthrough | 51 passed · passed · passed |
 
 ## 9. Running the project
 
@@ -147,6 +159,7 @@ Open <http://127.0.0.1:8000>. The full install steps, the role-by-role walkthrou
 - Admin now opens on the product's current QC stage instead of an empty panel.
 - The Admin source registry no longer overflows on phone-width screens.
 - Added this report.
+- **UI redesign (18 October 2026):** reduced to five per-stage checks (2 checks, 2 certificates, 1 final review) shown in labelled columns; split the long page into five no-scroll views; moved forms into dialogs; replaced all demo buttons with a floating ✦ menu that includes one-tap role switching; added a glass design, dark mode and an on-chain record timeline. Per-batch blockchain work fell from 14 to 12 transactions.
 
 ## 11. Limitations
 
@@ -156,6 +169,8 @@ Open <http://127.0.0.1:8000>. The full install steps, the role-by-role walkthrou
 - The blockchain proves records have *not changed since commitment*. It cannot prove the original inspection was honest.
 
 ## 12. Future work
+
+For running costs on Polygon, Base and Ethereum, see [COST_ANALYSIS.md](COST_ANALYSIS.md).
 
 - Deploy to a public testnet (for example Polygon Amoy) with proper key management.
 - Use PostgreSQL with migrations, and object storage or IPFS for evidence.

@@ -28,7 +28,7 @@ def test_source_and_profile_registry_are_authenticated_and_versioned(workflow):
     profile = client.get(
         "/api/quality/profiles/INDIA_LUXURY_FACIAL_SERUM_DEMO_V1", headers=headers
     ).json()
-    assert len(profile["requirements"]) == 24
+    assert len(profile["requirements"]) == 20
     assert repository.get_quality_source("ISO_FDIS_17516_ED2")["status"] == "DRAFT"
 
     iso = repository.get_quality_source("ISO_22716_2007")
@@ -86,7 +86,7 @@ def test_mappings_are_deliberate_many_to_many_and_drafts_are_not_active(workflow
         "/api/quality/sources/INDIA_COSMETICS_RULES_2020", headers=headers
     ).json()
     assert {item["code"] for item in rules["mapped_requirements"]} == {
-        "MFG-LABEL-TRACEABILITY", "RTL-LABEL", "RTL-EXPIRY"
+        "MFG-PACK", "RTL-LABEL"
     }
     retail_pack = next(item for item in retailer if item["code"] == "RTL-PACK")
     assert retail_pack["classification"] == "ORIGINCHAIN_INTERNAL"
@@ -111,7 +111,7 @@ def test_source_lifecycle_warning_and_profile_reseed_are_supported(workflow):
     repository.init_db()
     repository.init_db()
     assert len(repository.quality_profiles()) == 1
-    assert len(repository.get_quality_profile("INDIA_LUXURY_FACIAL_SERUM_DEMO_V1")["requirements"]) == 24
+    assert len(repository.get_quality_profile("INDIA_LUXURY_FACIAL_SERUM_DEMO_V1")["requirements"]) == 20
     assert len(repository.quality_sources()) == 9
 
 

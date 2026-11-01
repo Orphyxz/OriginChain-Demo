@@ -200,36 +200,31 @@ Admin is intentionally not an all-powerful supply-chain actor. It can inspect al
 
 ### 5-Minute Presentation Flow
 
-Demo Auto-Fill exists solely to speed up the local university presentation. It uses the real quality service, evidence-integrity checks, approval gates, actor attribution, custody rules, and blockchain writes. It does not replace the manual workflow. Keep `ORIGINCHAIN_DEMO_MODE=1` only for the local demo.
+Every demo shortcut lives in the gold **✦** button fixed to the bottom-right of the screen. It also has a one-tap **Switch role** row (S · M · D · R · A), so you never need to sign out and back in. The shortcuts use the real quality service, evidence-integrity checks, approval gates, actor attribution, custody rules and blockchain writes. Keep `ORIGINCHAIN_DEMO_MODE=1` only for the local demo; with it off, the ✦ button disappears.
 
 1. Start a fresh Hardhat node, deploy the contract, and start FastAPI.
-2. Admin → **Run Demo Readiness Check** → confirm `READY` → **Prepare Fresh Demo**.
-3. Supplier → **Demo Auto-Fill** → sign out.
-4. Manufacturer → **Demo Auto-Fill** → **Transfer to Distributor** → sign out.
-5. Distributor → **Demo Auto-Fill** → **Transfer to Retailer** → sign out.
-6. Retailer → **Demo HOLD Case** → show the failed seal and `HOLD` → **Fix Demo Issue** → sign out.
-7. Public verification → verify the product code shown by the app → show `Authentic` and `Approved for Sale`.
-8. Admin → **Demo: Tamper Local Metadata** → sign out.
-9. Public verification → verify again → show `Suspicious` and the blockchain hash mismatch.
+2. ✦ → **A** → **Readiness check** → **Prepare fresh demo**.
+3. ✦ → **S** → **Auto-fill my checks**.
+4. ✦ → **M** → **Auto-fill my checks** → **Send to distributor** (Quality view).
+5. ✦ → **D** → **Auto-fill my checks** → **Send to retailer**.
+6. ✦ → **R** → **Create HOLD case** → show the failed *Seal and packaging* check and `HOLD` → **Fix the HOLD (auto-fill)**.
+7. **Verify** → show `Authentic` and `Approved for sale`.
+8. ✦ → **A** → **Tamper product data** (opens Verify automatically) → show `Suspicious` and the hash mismatch.
 
-The overview's **Demo Progress** row is calculated from live approvals, custody, sale status, and blockchain metadata integrity. Transfers intentionally remain manual so custody changes are visible during the presentation.
+Transfers intentionally remain manual so custody changes are visible during the presentation.
 
 ### Fast presentation mode
 
-For a presentation without manual data entry, sign in as `admin` and click **Load Complete Presentation Demo** in the Admin section. The server creates or finishes the fictional material/product records, required evidence, four stage approvals, Manufacturer → Distributor → Retailer transfers, and the final `APPROVED_FOR_SALE` state against the running local Hardhat chain. You can then use the Admin stage tabs to inspect every stage and use the product code automatically placed in Public Verification. This is normally `OC-LUX-SERUM-0001`; after a local-only reset, the loader safely chooses an unused `OC-LUX-SERUM-PRESENTATION-####` code if the canonical code still exists on-chain. The fixture is explicitly fictional and creates no certification or accreditation claim.
-
-The button is idempotent after completion and can also finish a normal partially registered batch at Manufacturer, Distributor, or Retailer stage. It remains Admin-only and requires a connected, deployed local blockchain.
-
-The recommended live walkthrough is the role-by-role flow above. The Admin full loader remains available as a fallback when only the final state needs to be shown.
+For a presentation without manual data entry: ✦ → **A** → **Load full demo**. The server creates or finishes the fictional material/product records, required evidence, four stage approvals, Manufacturer → Distributor → Retailer transfers, and the final `APPROVED_FOR_SALE` state against the running local Hardhat chain. The product code is normally `OC-LUX-SERUM-0001`; after a local-only reset, the loader safely chooses an unused `OC-LUX-SERUM-PRESENTATION-####` code if the canonical code still exists on-chain. The fixture is explicitly fictional and creates no certification or accreditation claim.
 
 ### Manual role-by-role mode
 
-1. Sign in as `supplier`. Register `Hyaluronic Acid Solution` batch `HA-260801`, complete Raw Material QC, upload the required evidence, approve, then sign out.
+1. Sign in as `supplier`. Register `Hyaluronic Acid Solution` batch `HA-260801`, complete its 5 checks (upload both certificates), approve, then sign out.
 2. Sign in as `manufacturer`. Select the approved material, register `Aurelia Prestige Renewal Serum`, complete Manufacturer QC/evidence, approve, transfer to Distributor, then sign out.
 3. Sign in as `distributor`. Complete Distribution QC/evidence, approve, transfer to Retailer, then sign out.
-4. Sign in as `retailer`. Save **Security Seal Inspection** as `FAIL`, confirm `HOLD` and the approval blocker, correct it to `PASS`, approve to reach `APPROVED_FOR_SALE`, then sign out.
+4. Sign in as `retailer`. Mark **Seal and packaging** as `Fail`, confirm `HOLD` and the approval blocker, correct it to `PASS`, approve to reach `APPROVED_FOR_SALE`, then sign out.
 5. Without signing in, verify `OC-LUX-SERUM-0001`. Show the authentic result, four approved stages, role-only provenance, and consumer-visible evidence.
-6. Sign in as `admin`. Show the attributed audit history, run **Demo: Tamper Local Metadata**, then sign out.
+6. Sign in as `admin`. Show the attributed audit history, run ✦ → **Tamper product data**, then sign out.
 7. Without signing in, verify again and show `SUSPICIOUS` with a blockchain hash mismatch.
 
 Evidence-required checks cannot be approved without an uploaded PDF/PNG/JPEG of the expected document type. The COA, microbiology, and preservation-efficacy gates additionally require a suitable issuer currently accepted as `TRUSTED_DEMO` plus a report number at submission. “Verified for Demo” means only that OriginChain accepted the record against its local fictional registry controls; it is not certification, accreditation, or laboratory validation. Internal evidence stays absent from consumer responses; only `CONSUMER_VISIBLE` evidence is summarized publicly.
@@ -290,6 +285,19 @@ Official URLs, status research, applicability, exclusions, and the full mapping 
 ### Source Lifecycle
 
 `PUBLISHED_CURRENT` identifies the published reference found current during the recorded manual verification. `PUBLISHED_UNDER_REVISION` warns that revision work exists while retaining the published edition mapping. `DRAFT` sources are visible for change awareness but are never active requirement mappings. The registry also supports `SUPERSEDED`, `WITHDRAWN`, and `UNKNOWN`; new editions must receive new versioned source codes, while historical result snapshots keep the edition originally referenced.
+
+## Quality checks: five per stage
+
+Every stage uses the same easy-to-read structure, shown as three labelled columns in the **Quality** view:
+
+| Stage | Check ×2 (inspections) | Certificate ×2 (uploaded documents) | Final review ×1 |
+|---|---|---|---|
+| Raw materials | Material identity · Container condition | Certificate of Analysis* · Ingredient safety review | Supplier release |
+| Manufacturing | Product appearance · Bottle, seal and label | Microbiology report* · Preservation test report* | Batch release |
+| Distribution | Shipment received · Damage inspection | Shipping record · Storage log | Release to retailer |
+| Retail | Seal and packaging · Label and expiry date | Goods receipt note · Retail inspection report | Approve for sale |
+
+\* Needs a `TRUSTED_DEMO` issuer and a report number. Older databases are migrated automatically: retired checks are deactivated at startup.
 
 ## Quality gates
 
@@ -378,7 +386,7 @@ Run the revoked-issuer drill after (or independently of) the primary smoke while
 
 Admin-authenticated `POST /api/demo/reset` removes local SQLite operational records and files under `backend/uploads/`. It preserves users, audit history, product specifications, specification requirements, source/profile governance, evidence issuers, source reviews, and change records. It does **not** reset blockchain state. To reuse the same product code from a fully clean chain, restart the Hardhat node and redeploy the contract.
 
-The Admin UI labels this action **Prepare Fresh Demo** and repeats the boundary before running it. For a completely fresh presentation: stop FastAPI, restart `npx hardhat node`, run `npm run deploy:local`, start FastAPI, then click **Prepare Fresh Demo**. The browser never attempts to stop or restart system processes.
+The ✦ menu labels this action **Prepare fresh demo** and repeats the boundary before running it. For a completely fresh presentation: stop FastAPI, restart `npx hardhat node`, run `npm run deploy:local`, start FastAPI, then run **Prepare fresh demo**. The browser never attempts to stop or restart system processes.
 
 ### Duplicate product troubleshooting
 

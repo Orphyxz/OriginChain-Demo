@@ -2,12 +2,14 @@ const state = {
   materials: [], products: [], activeStage: null, contextType: null,
   contextId: null, activeSummary: null, verification: null, user: null,
   qualitySources: [], qualityProfiles: [], productSpecifications: [], evidenceIssuers: [],
-  sourceReviews: [], changeRecords: [],
-  demoMode: false, demoAction: null, health: null,
+  sourceReviews: [], changeRecords: [], journey: [],
+  demoMode: false, demoAction: null, health: null, evidenceCheck: null,
+  boardEnter: false, changedStandard: null,
   token: localStorage.getItem("originchain_demo_access_token") || null,
 };
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
+const DEMO_PASSWORD = "OriginDemo2026!";
 const STAGES = ["RAW_MATERIAL_SUPPLIER", "MANUFACTURER", "DISTRIBUTOR", "RETAILER"];
 const STAGE_NAMES = {
   RAW_MATERIAL_SUPPLIER: "Raw Materials", MANUFACTURER: "Manufacturing",
@@ -24,25 +26,34 @@ const ROLE_STAGE_VIEWS = {
   RETAILER: ["MANUFACTURER", "DISTRIBUTOR", "RETAILER"],
   ADMIN: STAGES,
 };
-const LABELS = {
-  APPROVED_FOR_SALE: "Approved for Sale", NOT_READY: "Not Ready",
-  NOT_APPLICABLE: "Not Applicable", CONSUMER_VISIBLE: "Visible to Consumer",
-  INTERNAL: "Internal", FILE_MISSING: "File Missing", RAW_MATERIAL: "Raw Materials",
-  PENDING: "Pending", APPROVED: "Approved", HOLD: "Hold", REJECTED: "Rejected",
-  PASS: "Pass", FAIL: "Fail", VERIFIED: "Verified", MISMATCH: "Mismatch",
-  SUSPICIOUS: "Suspicious", GENUINE: "Authentic",
-  REGULATORY: "Regulatory Traceability", STANDARD_BASED: "Standard Based",
-  INDUSTRY_GUIDANCE: "Industry Guidance", ORIGINCHAIN_INTERNAL: "OriginChain Internal",
-  ORGANIZATION_INTERNAL: "Organization Internal", PUBLISHED_CURRENT: "Published Current",
-  PUBLISHED_UNDER_REVISION: "Published · Under Revision", DRAFT: "Draft · Not Active",
-  SUPERSEDED: "Superseded", WITHDRAWN: "Withdrawn", UNKNOWN: "Status Unknown",
-  STANDARD_LEVEL: "Standard-Level Mapping", CERTIFICATE_OF_ANALYSIS: "Certificate of Analysis",
-  MICROBIOLOGY_REPORT: "Microbiology Report", PRESERVATIVE_EFFICACY_REPORT: "Preservative-Efficacy Report",
-  RAW_MATERIAL_SPECIFICATION: "Raw-Material Specification", BATCH_MANUFACTURING_RECORD: "Batch Manufacturing Record",
-  PACKAGING_INSPECTION: "Packaging Inspection", TRANSPORT_RECORD: "Transport Record",
-  RETAIL_INSPECTION: "Retail Inspection", OTHER: "Other Evidence",
+const ROLE_NAMES = {
+  RAW_MATERIAL_SUPPLIER: "Supplier", MANUFACTURER: "Manufacturer",
+  DISTRIBUTOR: "Distributor", RETAILER: "Retailer", ADMIN: "Admin",
 };
-const DOCUMENT_TYPES = ["CERTIFICATE_OF_ANALYSIS", "MICROBIOLOGY_REPORT", "PRESERVATIVE_EFFICACY_REPORT", "RAW_MATERIAL_SPECIFICATION", "BATCH_MANUFACTURING_RECORD", "PACKAGING_INSPECTION", "TRANSPORT_RECORD", "RETAIL_INSPECTION", "OTHER"];
+const OPERATIONAL_ROLES = ["RAW_MATERIAL_SUPPLIER", "MANUFACTURER", "DISTRIBUTOR", "RETAILER"];
+const LANES = [
+  { category: "Check", label: "Checks", cls: "kind-check", hint: "Hands-on inspections" },
+  { category: "Certificate", label: "Certificates", cls: "kind-cert", hint: "Uploaded documents" },
+  { category: "Final review", label: "Final review", cls: "kind-final", hint: "Sign-off" },
+];
+const LABELS = {
+  APPROVED_FOR_SALE: "Approved for sale", NOT_READY: "Not ready", NOT_APPLICABLE: "N/A",
+  CONSUMER_VISIBLE: "Public", INTERNAL: "Internal", FILE_MISSING: "File missing",
+  PENDING: "Pending", APPROVED: "Approved", HOLD: "On hold", REJECTED: "Rejected",
+  PASS: "Pass", FAIL: "Fail", VERIFIED: "Verified", MISMATCH: "Mismatch",
+  SUSPICIOUS: "Suspicious", GENUINE: "Authentic", NOT_STARTED: "Not started", READY: "Ready to approve",
+  CERTIFICATE_OF_ANALYSIS: "Certificate of Analysis", MICROBIOLOGY_REPORT: "Microbiology report",
+  PRESERVATIVE_EFFICACY_REPORT: "Preservation report", RAW_MATERIAL_SPECIFICATION: "Ingredient review",
+  BATCH_MANUFACTURING_RECORD: "Batch record", PACKAGING_INSPECTION: "Packaging inspection",
+  TRANSPORT_RECORD: "Shipping record", STORAGE_RECORD: "Storage log", GOODS_RECEIPT: "Goods receipt",
+  RETAIL_INSPECTION: "Retail inspection", OTHER: "Document",
+  TRUSTED_DEMO: "Trusted", UNVERIFIED: "Unverified", REVOKED: "Revoked",
+  PUBLISHED_CURRENT: "Current", PUBLISHED_UNDER_REVISION: "Under revision", DRAFT: "Draft",
+  RAW_MATERIAL_SUPPLIER: "Supplier", MANUFACTURER: "Manufacturer", DISTRIBUTOR: "Distributor",
+  RETAILER: "Retailer", ADMIN: "Admin",
+};
+const GOOD = ["APPROVED", "APPROVED_FOR_SALE", "PASS", "VERIFIED", "VERIFIED_DEMO", "TRUSTED_DEMO", "GENUINE", "SUCCESS", "PUBLISHED_CURRENT", "CURRENT", "IMPLEMENTED", "READY"];
+const BAD = ["HOLD", "REJECTED", "FAIL", "MISMATCH", "SUSPICIOUS", "REVOKED", "FILE_MISSING", "BLOCKED", "FAILED", "DRAFT", "SUPERSEDED", "WITHDRAWN", "EXPIRED", "NOT_READY_CHECK"];
 
 function esc(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;")
@@ -50,42 +61,59 @@ function esc(value) {
 }
 
 function label(value) {
-  if (!value) return "Not Started";
+  if (!value) return "Not started";
   return LABELS[value] || String(value).toLowerCase().split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+    .map((part, i) => (i === 0 ? part.charAt(0).toUpperCase() + part.slice(1) : part)).join(" ");
 }
 
+function pill(value, text = label(value), extra = "") {
+  const tone = GOOD.includes(value) ? "ok" : BAD.includes(value) ? "bad" : value ? "" : "idle";
+  return `<span class="pill ${tone} ${extra}">${esc(text)}</span>`;
+}
+
+function stageStatus(summary) {
+  return summary?.status === "PENDING" && summary.eligible_for_approval ? "READY" : summary?.status;
+}
+
+function short(hash) {
+  return hash ? `${hash.slice(0, 8)}…${hash.slice(-6)}` : "—";
+}
+
+/* ---------- Feedback ---------- */
 function showFeedback(title, detail = "", type = "error", items = []) {
   const box = $("#notice");
   box.setAttribute("role", type === "error" ? "alert" : "status");
-  box.className = `notice ${type}`;
+  box.className = `toast ${type}`;
+  const duration = type === "error" ? 9000 : 5000;
+  box.style.setProperty("--toast-ms", `${duration}ms`);
+  box.querySelector(".toast-icon")?.remove();
+  box.insertAdjacentHTML("afterbegin", `<span class="toast-icon" aria-hidden="true">${{ success: "✓", warning: "!", error: "×" }[type] || "i"}</span>`);
+  box.querySelector(".toast-timer")?.remove();
+  box.insertAdjacentHTML("beforeend", '<i class="toast-timer" aria-hidden="true"></i>');
   $("#noticeBody").innerHTML = `<strong>${esc(title)}</strong>${detail ? `<span>${esc(detail)}</span>` : ""}${items.length ? `<ul>${items.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}`;
   clearTimeout(showFeedback.timer);
-  showFeedback.timer = setTimeout(() => box.classList.add("hidden"), type === "error" ? 10000 : 6500);
+  showFeedback.timer = setTimeout(() => box.classList.add("hidden"), duration);
 }
 
 class ApiError extends Error {
   constructor(title, detail, items, status) {
     super(detail || title);
-    this.title = title;
-    this.detail = detail;
-    this.items = items;
-    this.status = status;
+    this.title = title; this.detail = detail; this.items = items; this.status = status;
   }
 }
 
 function parseApiError(body, status) {
   const detail = body?.detail ?? body;
-  if (typeof detail === "string") return new ApiError("Request could not be completed", detail, [], status);
+  if (typeof detail === "string") return new ApiError("Couldn't complete that", detail, [], status);
   if (Array.isArray(detail)) {
     const items = detail.map((item) => `${(item.loc || []).slice(1).join(" → ")}: ${item.msg}`);
-    return new ApiError("Please review the form", "Some values need attention.", items, status);
+    return new ApiError("Please check the form", "", items, status);
   }
   if (detail?.message) {
     const items = detail.blocking_reasons || (detail.guidance ? [detail.guidance] : []);
-    return new ApiError(detail.message, items.length ? "Review the requirements below." : "", items, status);
+    return new ApiError(detail.message, "", items, status);
   }
-  return new ApiError("Request could not be completed", `Server returned HTTP ${status}.`, [], status);
+  return new ApiError("Couldn't complete that", `Server returned HTTP ${status}.`, [], status);
 }
 
 async function api(path, options = {}) {
@@ -94,7 +122,7 @@ async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (requestToken) headers.set("Authorization", `Bearer ${requestToken}`);
   try { response = await fetch(path, { ...options, headers }); }
-  catch (_) { throw new ApiError("Application is unavailable", "Check that the FastAPI server is running.", [], 0); }
+  catch (_) { throw new ApiError("App is offline", "Check that the FastAPI server is running.", [], 0); }
   const contentType = response.headers.get("content-type") || "";
   const body = contentType.includes("json") ? await response.json() : await response.text();
   if (response.status === 401 && path !== "/api/auth/login" && state.token === requestToken) showLoggedOut();
@@ -102,116 +130,116 @@ async function api(path, options = {}) {
   return body;
 }
 
-function reportError(error, fallbackTitle = "Action could not be completed") {
-  showFeedback(error.title || fallbackTitle, error.detail || error.message, "error", error.items || []);
+function reportError(error, fallbackTitle = "Couldn't complete that") {
+  showFeedback(error.title || fallbackTitle, error.detail || "", "error", error.items || []);
 }
 
 async function withButton(button, pendingText, work) {
   if (!button || button.getAttribute("aria-busy") === "true") return;
-  const original = button.textContent;
+  const original = button.innerHTML;
   const originallyDisabled = button.disabled;
   button.disabled = true;
   button.setAttribute("aria-busy", "true");
-  button.textContent = pendingText;
+  if (pendingText) button.textContent = pendingText;
   try { return await work(); }
   finally {
     button.removeAttribute("aria-busy");
-    button.textContent = original;
+    button.innerHTML = original;
     button.disabled = originallyDisabled;
     updateControls();
   }
 }
 
-function nullifyBlankFields(payload, fields) {
-  fields.forEach((field) => { if (payload[field] === "") payload[field] = null; });
-  return payload;
+function json(payload) {
+  return { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) };
 }
 
+/* ---------- Routing ---------- */
+const VIEW_IDS = { signin: "access", overview: "overview", batches: "batches", quality: "quality", verify: "verify", admin: "admin" };
+
+function allowedView(name) {
+  if (!state.user) return ["signin", "verify"].includes(name) ? name : "signin";
+  if (name === "signin" || !VIEW_IDS[name]) return "overview";
+  if (name === "admin" && state.user.role !== "ADMIN") return "overview";
+  return name;
+}
+
+function go(name) {
+  const target = `#${name}`;
+  if (location.hash === target) route(); else location.hash = target;
+}
+
+function route() {
+  const [rawName, ...rest] = location.hash.slice(1).split("/");
+  const deepCode = rawName === "verify" && rest.length ? decodeURIComponent(rest.join("/")) : null;
+  const name = allowedView(rawName);
+  Object.entries(VIEW_IDS).forEach(([view, id]) => $(`#${id}`).classList.toggle("hidden", view !== name));
+  $$("#primaryNav a").forEach((link) => {
+    if (link.dataset.view === name) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+  if (`#${name}` !== location.hash && !deepCode && !(name === "signin" && !location.hash)) history.replaceState(null, "", `#${name}`);
+  if (deepCode) {
+    $("#verifyCode").value = deepCode;
+    runVerify(true);
+  }
+  if (name === "admin") refreshAudit();
+}
+window.addEventListener("hashchange", route);
+
+/* ---------- Permissions ---------- */
 function currentProduct() {
   return state.products.find((item) => item.product_code === "OC-LUX-SERUM-0001") || state.products[0] || null;
 }
-
 function canWriteStage(stage) {
   return Boolean(state.user && ROLE_STAGE[state.user.role] === stage);
 }
-
 function canViewStage(stage) {
   return Boolean(state.user && (ROLE_STAGE_VIEWS[state.user.role] || []).includes(stage));
 }
+function isExpired(dateValue) {
+  if (!dateValue) return false;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return new Date(`${dateValue}T00:00:00`) < today;
+}
+function eligibleMaterials() {
+  return state.materials.filter((item) => item.quality_status === "APPROVED" && !isExpired(item.expiry_retest_date));
+}
 
+/* ---------- Session ---------- */
 function showLoggedOut(message = "") {
-  state.token = null; state.user = null; state.materials = []; state.products = [];
-  state.activeStage = null; state.contextType = null; state.contextId = null; state.activeSummary = null;
-  state.qualitySources = []; state.qualityProfiles = []; state.productSpecifications = [];
-  state.evidenceIssuers = []; state.sourceReviews = []; state.changeRecords = [];
+  Object.assign(state, {
+    token: null, user: null, materials: [], products: [], activeStage: null, contextType: null,
+    contextId: null, activeSummary: null, qualitySources: [], qualityProfiles: [],
+    productSpecifications: [], evidenceIssuers: [], sourceReviews: [], changeRecords: [], journey: [],
+  });
   localStorage.removeItem("originchain_demo_access_token");
-  $("#access").classList.remove("hidden");
   $("#operationalApp").hidden = true;
   $("#accountPanel").classList.add("hidden");
-  $("#admin").classList.add("hidden");
-  $("#demoTools").classList.add("hidden");
-  $("#demoProgress").classList.add("hidden");
-  $$(".operational-nav, .admin-nav").forEach((item) => item.classList.add("hidden"));
+  $$(".auth-only, .admin-only").forEach((item) => item.classList.add("hidden"));
   document.body.removeAttribute("data-role");
-  if (message) showFeedback("Session ended", message, "warning");
+  applyFabVisibility();
+  route();
+  if (message) showFeedback("Signed out", message, "warning");
 }
 
 function applyRoleUI() {
   const role = state.user?.role;
   if (!role) return showLoggedOut();
   document.body.dataset.role = role;
-  $("#access").classList.add("hidden");
   $("#operationalApp").hidden = false;
   $("#accountPanel").classList.remove("hidden");
   $("#accountName").textContent = state.user.display_name;
-  $("#accountOrganization").textContent = state.user.organization_name;
-  $("#accountRole").textContent = label(role);
-  $$(".operational-nav").forEach((item) => item.classList.remove("hidden"));
-  const showMaterials = ["RAW_MATERIAL_SUPPLIER", "MANUFACTURER", "ADMIN"].includes(role);
-  const showManufacturing = ["MANUFACTURER", "DISTRIBUTOR", "RETAILER", "ADMIN"].includes(role);
-  const navigationCopy = {
-    RAW_MATERIAL_SUPPLIER: { materials: "Raw Materials", product: "Manufacturing", quality: "Raw Material QC" },
-    MANUFACTURER: { materials: "Approved Raw Materials", product: "Manufacturing", quality: "Manufacturer QC" },
-    DISTRIBUTOR: { materials: "Raw Materials", product: "Received Product", quality: "Distribution QC" },
-    RETAILER: { materials: "Raw Materials", product: "Received Product", quality: "Retail QC" },
-    ADMIN: { materials: "Raw Materials", product: "Product Record", quality: "All Quality Stages" },
-  }[role];
-  $('[data-nav-role="materials"]').textContent = navigationCopy.materials;
-  $('[data-nav-role="manufacturing"]').textContent = navigationCopy.product;
-  $('[data-nav-role="operations"]').textContent = navigationCopy.quality;
-  $("#materials").classList.toggle("hidden", !showMaterials);
-  $("#materials").classList.toggle("read-only-section", role !== "RAW_MATERIAL_SUPPLIER");
-  $("#materialRegistrationPanel").classList.toggle("hidden", role !== "RAW_MATERIAL_SUPPLIER");
-  $("#manufacturing").classList.toggle("hidden", !showManufacturing);
-  $("#productForm").classList.toggle("hidden", role !== "MANUFACTURER");
-  $("#productSectionHeading").textContent = role === "MANUFACTURER" ? "Create the finished batch"
-    : role === "ADMIN" ? "Finished-product record" : "Received finished product";
-  $("#productSectionIntro").textContent = role === "MANUFACTURER"
-    ? "Only approved raw-material batches can be linked. The resulting lineage receives a deterministic integrity commitment."
-    : "Read-only batch, custody, and approved raw-material lineage for the authenticated downstream actor.";
-  $('[data-nav-role="materials"]').classList.toggle("hidden", !showMaterials);
-  $('[data-nav-role="manufacturing"]').classList.toggle("hidden", !showManufacturing);
-  $("#admin").classList.toggle("hidden", role !== "ADMIN");
-  $(".admin-nav").classList.toggle("hidden", role !== "ADMIN");
-  const operationalDemoRole = ["RAW_MATERIAL_SUPPLIER", "MANUFACTURER", "DISTRIBUTOR", "RETAILER"].includes(role);
-  $("#demoTools").classList.toggle("hidden", !state.demoMode || !operationalDemoRole);
-  $$(".demo-only").forEach((item) => item.classList.toggle("hidden", !state.demoMode));
-  if (state.demoMode && operationalDemoRole) {
-    const copy = {
-      RAW_MATERIAL_SUPPLIER: ["Supplier Demo Auto-Fill", "Creates or resumes the fictional HA-260801 batch, completes its required QC/evidence, and approves it."],
-      MANUFACTURER: ["Manufacturer Demo Auto-Fill", "Uses an approved raw material, registers the serum and specification on-chain, then completes Manufacturer QC. Transfer stays manual."],
-      DISTRIBUTOR: ["Distributor Demo Auto-Fill", "Completes receiving, custody, storage, damage, and release checks. Transfer stays manual."],
-      RETAILER: ["Retailer Demo Auto-Fill", "Completes or corrects Retail QC and records Approved for Sale. Use Demo HOLD Case first to show the blocker."],
-    }[role];
-    $("#demoToolTitle").textContent = copy[0];
-    $("#demoToolCopy").textContent = copy[1];
-    $("#demoHoldButton").classList.toggle("hidden", role !== "RETAILER");
-    $("#demoAutofillButton").textContent = role === "RETAILER" && currentProduct()?.final_sale_status === "HOLD"
-      ? "Fix Demo Issue" : "Demo Auto-Fill";
-  }
-  $$(".stage-tabs button").forEach((button) => {
-    button.hidden = !canViewStage(button.dataset.stage);
-  });
+  $("#accountRole").textContent = ROLE_NAMES[role];
+  $("#accountAvatar").textContent = ROLE_NAMES[role].charAt(0);
+  $$(".auth-only").forEach((item) => item.classList.remove("hidden"));
+  $$(".admin-only").forEach((item) => item.classList.toggle("hidden", role !== "ADMIN"));
+  $("#materials").classList.toggle("hidden", !["RAW_MATERIAL_SUPPLIER", "MANUFACTURER", "ADMIN"].includes(role));
+  $("#manufacturing").classList.toggle("hidden", role === "RAW_MATERIAL_SUPPLIER");
+  $("#batches").style.gridTemplateColumns = ["RAW_MATERIAL_SUPPLIER", "DISTRIBUTOR", "RETAILER"].includes(role) ? "1fr" : "";
+  $("#openMaterialForm").classList.toggle("hidden", role !== "RAW_MATERIAL_SUPPLIER");
+  $$(".stage-tabs button").forEach((button) => { button.hidden = !canViewStage(button.dataset.stage); });
+  applyFabVisibility();
   updateControls();
 }
 
@@ -221,20 +249,78 @@ async function beginSession(token, user) {
   applyRoleUI();
   await Promise.all([refreshRecords(), refreshQualityReferences()]);
   await refreshDashboard();
-  const stage = ROLE_STAGE[user.role];
-  if (stage === "RAW_MATERIAL_SUPPLIER" && state.materials.length) {
-    await selectQuality(stage, "RAW_MATERIAL", state.materials[0].id);
-  } else if (stage && currentProduct()) {
-    await selectQuality(stage, "PRODUCT", currentProduct().product_code);
-  } else if (user.role === "ADMIN" && currentProduct()) {
-    const product = currentProduct();
-    await selectQuality(STAGES.includes(product.current_stage) ? product.current_stage : "RETAILER", "PRODUCT", product.product_code);
-  } else if (user.role === "ADMIN" && state.materials.length) {
-    await selectQuality("RAW_MATERIAL_SUPPLIER", "RAW_MATERIAL", state.materials[0].id);
-  }
-  if (user.role === "ADMIN") { renderQualityReferences(); await refreshAudit(); }
+  await selectDefaultStage();
+  route();
 }
 
+async function selectDefaultStage() {
+  const role = state.user?.role;
+  const stage = ROLE_STAGE[role];
+  const product = currentProduct();
+  if (stage === "RAW_MATERIAL_SUPPLIER" && state.materials.length) {
+    await selectQuality(stage, "RAW_MATERIAL", state.materials[0].id);
+  } else if (stage && product) {
+    await selectQuality(stage, "PRODUCT", product.product_code);
+  } else if (role === "ADMIN" && product) {
+    await selectQuality(STAGES.includes(product.current_stage) ? product.current_stage : "RETAILER", "PRODUCT", product.product_code);
+  } else if (role === "ADMIN" && state.materials.length) {
+    await selectQuality("RAW_MATERIAL_SUPPLIER", "RAW_MATERIAL", state.materials[0].id);
+  } else {
+    renderEmptyBoard();
+  }
+}
+
+async function signIn(username, password) {
+  const result = await api("/api/auth/login", json({ username, password }));
+  await beginSession(result.access_token, result.user);
+  return result.user;
+}
+
+$("#loginForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  withButton(event.submitter || $("#loginButton"), "Signing in…", async () => {
+    try {
+      const user = await signIn($("#loginUsername").value.trim(), $("#loginPassword").value);
+      showFeedback(`Welcome, ${ROLE_NAMES[user.role]}`, user.display_name, "success");
+      go("overview");
+    } catch (error) { reportError(error, "Sign in failed"); }
+  });
+});
+
+$$(".demo-account").forEach((button) => button.addEventListener("click", () => {
+  $("#loginUsername").value = button.dataset.username;
+  $("#loginPassword").value = DEMO_PASSWORD;
+  $("#loginForm").requestSubmit();
+}));
+
+$("#logoutButton").addEventListener("click", () => {
+  showLoggedOut();
+  $("#loginPassword").value = "";
+  go("signin");
+});
+
+/* ---------- Health ---------- */
+function applyHealth(health) {
+  state.health = health;
+  $("#chainPill").classList.toggle("online", health.blockchain_connected);
+  $("#chainPill span").textContent = health.blockchain_connected ? `Block ${health.current_block}` : "Chain offline";
+  $("#networkName").textContent = health.blockchain_connected ? `Hardhat local · block ${health.current_block}` : "Offline";
+  $("#contractAddress").textContent = short(health.contract_address);
+}
+
+async function refreshHealth(quiet = false) {
+  try {
+    applyHealth(await api("/api/health"));
+  } catch (error) {
+    state.health = null;
+    $("#chainPill").classList.remove("online");
+    $("#chainPill span").textContent = "Offline";
+    $("#networkName").textContent = "API unavailable";
+    if (!quiet) reportError(error, "Connection check failed");
+  }
+}
+
+/* ---------- Reference data ---------- */
 async function refreshQualityReferences() {
   [state.qualitySources, state.qualityProfiles, state.productSpecifications, state.evidenceIssuers] = await Promise.all([
     api("/api/quality/sources"), api("/api/quality/profiles"),
@@ -244,91 +330,31 @@ async function refreshQualityReferences() {
     [state.sourceReviews, state.changeRecords] = await Promise.all([
       api("/api/quality/source-reviews"), api("/api/quality/change-records?limit=50"),
     ]);
+    renderGovernance();
   }
-  renderSpecificationSelection();
-  if (state.user?.role === "ADMIN") renderQualityReferences();
-}
-
-function renderSpecificationSelection() {
-  const select = $("#specificationSelect");
   const applicable = state.productSpecifications.filter((item) => item.status === "APPROVED" && item.active);
-  select.innerHTML = applicable.length
+  $("#specificationSelect").innerHTML = applicable.length
     ? applicable.map((item) => `<option value="${esc(item.specification_code)}">${esc(item.specification_name)} · v${esc(item.version)}</option>`).join("")
-    : '<option value="">No approved effective specification</option>';
-  const spec = applicable[0];
-  const card = $("#manufacturerSpecification");
-  if (!spec) {
-    card.className = "specification-card empty-state";
-    card.textContent = "No approved product specification is available.";
-    return;
-  }
-  card.className = "specification-card";
-  card.innerHTML = `<small>Product Specification</small><strong>${esc(spec.specification_name)}</strong><span>Version ${esc(spec.version)} · <b class="status ${esc(spec.status)}">${esc(label(spec.status))}</b></span><span>Applicable to ${esc(label(spec.product_type))}</span><span>${esc(spec.visual_requirement_count)} visual requirements · Quality Profile ${esc(state.qualityProfiles[0]?.profile_code || "Not assigned")}</span><p>${esc(spec.disclaimer)}</p>`;
+    : '<option value="">No approved specification</option>';
 }
 
-function renderQualityReferences() {
+function miniRows(items, render, empty) {
+  return items.length ? items.map(render).join("") : `<div class="empty-state">${empty}</div>`;
+}
+
+function renderGovernance() {
+  $("#specificationRegistry").innerHTML = miniRows(state.productSpecifications, (item) => `<div class="mini-row"><div><strong>${esc(item.specification_name)}</strong><small>v${esc(item.version)} · ${esc(item.requirement_count)} requirements</small></div>${pill(item.status)}</div>`, "None.");
+  $("#issuerRegistry").innerHTML = miniRows(state.evidenceIssuers, (item) => `<div class="mini-row"><div><strong>${esc(item.issuer_name)}</strong><small>${esc(label(item.issuer_type))}</small></div>${pill(item.trust_status)}</div>`, "None.");
+  $("#sourceReviewRegistry").innerHTML = miniRows(state.sourceReviews, (item) => `<div class="mini-row"><div><strong>${esc(item.source_code)}</strong><small>Next review ${esc(item.next_review_due || "not set")}</small></div>${pill(item.review_status)}</div>`, "None.");
+  $("#changeRegistry").innerHTML = miniRows(state.changeRecords, (item) => `<div class="mini-row"><div><strong>${esc(label(item.change_type))}</strong><small>${esc(item.target_code)} · ${esc(item.change_summary)}</small></div>${pill(item.status)}</div>`, "None.");
   const profile = state.qualityProfiles[0];
-  if (profile) {
-    $("#profileSummary").className = "profile-summary";
-    $("#profileSummary").innerHTML = `<strong>${esc(profile.name)}</strong><span>${esc(profile.profile_code)} · v${esc(profile.version)} · ${esc(label(profile.jurisdiction))}</span><p>${esc(profile.disclaimer)}</p><small>${esc(profile.requirement_count)} mapped requirements</small>`;
-  }
-  const registry = $("#sourceRegistry");
-  if (!state.qualitySources.length) {
-    registry.className = "source-registry empty-state";
-    registry.textContent = "No controlled sources are registered.";
-    return;
-  }
-  registry.className = "source-registry";
-  registry.innerHTML = state.qualitySources.map((source) => `<article>
-    <div><strong>${esc(source.source_code)}</strong><small>${esc(source.authority)} · ${esc(source.edition)}</small><span>${esc(source.title)}</span></div>
-    <div><span class="status ${esc(source.status)}">${esc(label(source.status))}</span><small>Verified ${esc(source.last_verified_at)} · ${esc(source.mapped_requirement_count)} active mapping${source.mapped_requirement_count === 1 ? "" : "s"}</small></div>
-    <a href="${esc(source.source_url)}" target="_blank" rel="noopener noreferrer">Official source ↗</a>
-  </article>`).join("");
-
-  const specs = $("#specificationRegistry");
-  specs.className = "governance-list";
-  specs.innerHTML = state.productSpecifications.map((item) => `<article><div><strong>${esc(item.specification_name)}</strong><small>${esc(item.product_type)} · ${esc(item.requirement_count)} requirements · ${esc(item.visual_requirement_count)} visual</small></div><div><span>v${esc(item.version)}</span><span class="status ${esc(item.status)}">${esc(label(item.status))}</span><small>Effective ${esc(item.effective_from || "Not set")}</small></div></article>`).join("") || '<div class="empty-state">No specifications registered.</div>';
-
-  const issuers = $("#issuerRegistry");
-  issuers.className = "governance-list";
-  issuers.innerHTML = state.evidenceIssuers.map((item) => `<article><div><strong>${esc(item.issuer_name)}</strong><small>${esc(label(item.issuer_type))} · ${esc(item.issuer_code)}</small></div><span class="status ${esc(item.trust_status)}">${esc(label(item.trust_status))}</span></article>`).join("") || '<div class="empty-state">No evidence issuers registered.</div>';
-
-  const reviews = $("#sourceReviewRegistry");
-  reviews.className = "governance-list";
-  reviews.innerHTML = state.sourceReviews.map((item) => `<article><div><strong>${esc(item.source_code)}</strong><small>${esc(item.title)} · Owner ${esc(item.review_owner_name || item.review_owner_user_id || "Unassigned")}</small></div><div><span class="status ${esc(item.review_status)}">${esc(label(item.review_status))}</span><small>Last reviewed ${esc(item.reviewed_at || "Not reviewed")} · Next ${esc(item.next_review_due || "Not scheduled")}</small></div></article>`).join("") || '<div class="empty-state">No source reviews registered.</div>';
-
-  const changes = $("#changeRegistry");
-  changes.className = "governance-list";
-  changes.innerHTML = state.changeRecords.map((item) => `<article><div><strong>${esc(label(item.change_type))}</strong><small>${esc(item.target_code)}${item.previous_version || item.new_version ? ` · ${esc(item.previous_version || "New")} → ${esc(item.new_version || "Current")}` : ""}</small><span>${esc(item.change_summary)}</span></div><span class="status ${esc(item.status)}">${esc(label(item.status))}</span></article>`).join("") || '<div class="empty-state">No change records registered.</div>';
+  $("#profileSummary").innerHTML = profile
+    ? `<h2>${esc(profile.name)}</h2><small>v${esc(profile.version)} · ${esc(profile.requirement_count)} mapped checks · mappings explain evidence, not certification</small>`
+    : "";
+  $("#sourceRegistry").innerHTML = miniRows(state.qualitySources, (source) => `<div class="mini-row"><div><strong>${esc(source.title)}</strong><small>${esc(source.authority)} · ${esc(source.edition)} · <a href="${esc(source.source_url)}" target="_blank" rel="noopener noreferrer">official page ↗</a></small></div>${pill(source.status)}</div>`, "None.");
 }
 
-function isExpired(dateValue) {
-  if (!dateValue) return false;
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  return new Date(`${dateValue}T00:00:00`) < today;
-}
-
-function eligibleMaterials() {
-  return state.materials.filter((item) => item.quality_status === "APPROVED" && !isExpired(item.expiry_retest_date));
-}
-
-async function refreshHealth() {
-  try {
-    const health = await api("/api/health");
-    state.health = health;
-    $("#chainPill").classList.toggle("online", health.blockchain_connected);
-    $("#chainPill").lastChild.textContent = health.blockchain_connected ? " Connected" : " Offline";
-    $("#networkName").textContent = health.blockchain_connected
-      ? `${label(health.network || "Hardhat Local")} · block ${health.current_block}` : "Hardhat offline";
-  } catch (error) {
-    state.health = null;
-    $("#chainPill").classList.remove("online");
-    $("#chainPill").lastChild.textContent = " Offline";
-    $("#networkName").textContent = "API unavailable";
-    reportError(error, "Connection check failed");
-  }
-}
-
+/* ---------- Records ---------- */
 async function refreshRecords() {
   [state.materials, state.products] = await Promise.all([api("/api/raw-materials"), api("/api/products")]);
   renderMaterials();
@@ -341,378 +367,338 @@ function renderMaterials() {
   const list = $("#materialList");
   if (!state.materials.length) {
     list.className = "record-list empty-state";
-    list.textContent = "No raw-material batches yet. Register the first material batch to begin the serum supply-chain workflow.";
+    list.textContent = state.user?.role === "RAW_MATERIAL_SUPPLIER" ? "No materials yet. Register one to begin." : "No raw materials yet.";
     return;
   }
   list.className = "record-list";
   list.innerHTML = state.materials.map((item) => {
-    const expired = isExpired(item.expiry_retest_date);
-    const effectiveStatus = expired ? "EXPIRED" : item.quality_status;
-    return `<article class="record">
-      <div><strong>${esc(item.material_name)}</strong><small>${esc(item.internal_batch_id)} · supplier lot ${esc(item.supplier_lot_number)}</small>
-      <div class="record-meta"><span>${esc(item.supplier_name)}</span><span>${esc(item.quantity)} ${esc(item.unit)}</span><span>Received ${esc(item.received_date)}</span>${item.expiry_retest_date ? `<span>Retest ${esc(item.expiry_retest_date)}</span>` : ""}</div>
-      <span class="status ${esc(effectiveStatus)}">${esc(label(effectiveStatus))}</span></div>
-      <button class="quiet inspect-material" data-id="${esc(item.id)}">Open quality checks</button></article>`;
+    const status = isExpired(item.expiry_retest_date) ? "EXPIRED" : item.quality_status;
+    return `<div class="record"><strong>${esc(item.material_name)}</strong>${pill(status)}
+      <small>${esc(item.internal_batch_id)} · ${esc(item.supplier_name)} · ${esc(item.quantity)} ${esc(item.unit)}</small>
+      <button class="btn btn-ghost btn-sm inspect-material" data-id="${esc(item.id)}" type="button">Checks</button></div>`;
   }).join("");
-  $$(".inspect-material").forEach((button) => button.addEventListener("click", () =>
-    selectQuality("RAW_MATERIAL_SUPPLIER", "RAW_MATERIAL", button.dataset.id)));
+  $$(".inspect-material").forEach((button) => button.addEventListener("click", async () => {
+    await selectQuality("RAW_MATERIAL_SUPPLIER", "RAW_MATERIAL", button.dataset.id);
+    go("quality");
+  }));
 }
 
 function renderMaterialChoices() {
   const approved = eligibleMaterials();
-  const choices = $("#materialChoices");
-  if (!approved.length) {
-    choices.className = "choices empty-state";
-    choices.textContent = "No eligible materials. Complete supplier QC for at least one unexpired material batch.";
-  } else {
-    choices.className = "choices";
-    choices.innerHTML = approved.map((item) => `<label><input type="checkbox" value="${esc(item.id)}" checked>
-      <span><strong>${esc(item.material_name)}</strong> · ${esc(item.internal_batch_id)} <span class="status APPROVED">Approved</span></span></label>`).join("");
-  }
+  $("#materialChoices").innerHTML = approved.length
+    ? approved.map((item) => `<label><input type="checkbox" value="${esc(item.id)}" checked> ${esc(item.material_name)} · ${esc(item.internal_batch_id)}</label>`).join("")
+    : "No approved materials yet. The supplier must approve one first.";
 }
 
 function renderProductState() {
   const product = currentProduct();
-  const result = $("#productResult");
+  const box = $("#productResult");
   if (!product) {
-    result.className = "result muted";
-    result.textContent = "No finished serum batch registered yet. Approve a raw material to unlock registration.";
+    box.className = "empty-state";
+    box.textContent = state.user?.role === "MANUFACTURER"
+      ? (eligibleMaterials().length ? "Ready to register the finished batch." : "Waiting for an approved raw material.")
+      : "No finished batch yet.";
+    $("#overviewProduct").textContent = "Aurelia Prestige Renewal Serum";
     return;
   }
   $("#verifyCode").value = product.product_code;
   const materials = product.linked_raw_materials || [];
   const spec = product.product_specification;
-  result.className = "result";
-  result.innerHTML = `<strong>${esc(product.name)}</strong><div class="record-meta"><span>${esc(product.product_code)}</span><span>Batch ${esc(product.batch_number)}</span><span>${esc(label(product.current_stage))} custody</span></div>
-    <span class="status ${esc(product.final_sale_status)}">${esc(label(product.final_sale_status))}</span>
-    ${spec ? `<p><strong>Reference Specification</strong><br>${esc(spec.specification_name)} · v${esc(spec.version)} <span class="status APPROVED">Recorded</span></p>` : ""}
-    <p><strong>Linked materials</strong><br>${materials.length ? materials.map((item) => `${esc(item.material_name)} · ${esc(item.internal_batch_id)} (${esc(label(item.quality_status))})`).join("<br>") : "No linked materials"}</p>`;
+  box.className = "product-card";
+  box.innerHTML = `<div class="title"><div><span class="eyebrow">${esc(product.brand || "Aurelia Maison")}</span><h3>${esc(product.name)}</h3></div>${pill(product.final_sale_status)}</div>
+    <div class="kv">
+      <div><small>Product code</small><span class="mono">${esc(product.product_code)}</span></div>
+      <div><small>Batch</small><span>${esc(product.batch_number)}</span></div>
+      <div><small>Held by</small><span>${esc(label(product.current_stage))}</span></div>
+      <div><small>Expires</small><span>${esc(product.expiry_date || "—")} ${expiryBadge(product.expiry_date)}</span></div>
+      <div><small>Specification</small><span>${spec ? `v${esc(spec.version)}` : "—"}</span></div>
+      <div><small>Ingredients</small><span>${materials.length ? materials.map((item) => esc(item.internal_batch_id)).join(", ") : "—"}</span></div>
+    </div>
+    <div class="product-qr">
+      <img src="/api/qr/${encodeURIComponent(product.product_code)}" alt="QR code for ${esc(product.product_code)}" width="88" height="88">
+      <div><strong>Box QR code</strong><small>Customers scan this on the Verify page.</small>
+        <div class="row-actions"><button class="btn btn-ghost btn-sm" type="button" data-cert="${esc(product.product_code)}">Certificate</button><a class="btn btn-ghost btn-sm" href="#verify/${encodeURIComponent(product.product_code)}">Verify</a></div></div>
+    </div>`;
+  box.querySelector("[data-cert]")?.addEventListener("click", (event) => openCertificate(event.currentTarget.dataset.cert));
+  $("#overviewProduct").textContent = product.name;
 }
 
-function updateControls() {
-  const product = currentProduct();
-  const productButton = $("#registerProductButton");
-  if (product) {
-    productButton.disabled = true;
-    productButton.textContent = "Finished batch already registered";
-    $$("#productForm input, #productForm textarea, #productForm select").forEach((field) => { field.disabled = true; });
-  } else {
-    $$("#productForm input, #productForm textarea, #productForm select").forEach((field) => { field.disabled = false; });
-    productButton.disabled = state.user?.role !== "MANUFACTURER" || eligibleMaterials().length === 0;
-    productButton.textContent = "Register batch on blockchain";
-  }
-  $$(".stage-tabs button").forEach((button) => {
-    button.hidden = !canViewStage(button.dataset.stage);
-    button.disabled = button.dataset.stage === "RAW_MATERIAL_SUPPLIER" ? !state.materials.length : !product;
-  });
-  $("#registerMaterialButton").disabled = state.user?.role !== "RAW_MATERIAL_SUPPLIER";
-  const autoFillButton = $("#demoAutofillButton");
-  if (autoFillButton) {
-    autoFillButton.disabled = !state.demoMode || !["RAW_MATERIAL_SUPPLIER", "MANUFACTURER", "DISTRIBUTOR", "RETAILER"].includes(state.user?.role);
-    autoFillButton.textContent = state.user?.role === "RETAILER" && product?.final_sale_status === "HOLD"
-      ? "Fix Demo Issue" : "Demo Auto-Fill";
-  }
-  const holdButton = $("#demoHoldButton");
-  if (holdButton) {
-    holdButton.disabled = !state.demoMode || state.user?.role !== "RETAILER" || product?.current_stage !== "RETAILER";
-  }
-  const presentationButton = $("#loadPresentationButton");
-  if (presentationButton) {
-    const presentationComplete = product?.final_sale_status === "APPROVED_FOR_SALE";
-    presentationButton.disabled = state.user?.role !== "ADMIN" || presentationComplete;
-    presentationButton.textContent = presentationComplete
-      ? "Presentation Demo Loaded"
-      : product ? "Complete Existing Presentation Demo" : "Load Complete Presentation Demo";
-  }
-  $("#tamperButton").disabled = state.user?.role !== "ADMIN" || !product || state.verification?.status === "SUSPICIOUS";
-  if (!state.activeSummary) {
-    $("#approveStage").hidden = !state.activeStage || !canWriteStage(state.activeStage);
-    $("#approveStage").disabled = true;
-    $("#transferDistributor").hidden = state.user?.role !== "MANUFACTURER";
-    $("#transferDistributor").disabled = true;
-    $("#transferRetailer").hidden = state.user?.role !== "DISTRIBUTOR";
-    $("#transferRetailer").disabled = true;
-    return;
-  }
-  const summary = state.activeSummary;
-  const approve = $("#approveStage");
-  approve.hidden = !canWriteStage(state.activeStage);
-  approve.disabled = !canWriteStage(state.activeStage) || summary.status === "APPROVED";
-  approve.textContent = summary.status === "APPROVED"
-    ? `${summary.display_name} Approved`
-    : `Review & Approve ${summary.display_name}`;
-  $("#transferDistributor").hidden = state.user?.role !== "MANUFACTURER";
-  $("#transferDistributor").disabled = !(
-    state.user?.role === "MANUFACTURER" &&
-    state.activeStage === "MANUFACTURER" && summary.status === "APPROVED" && product?.current_stage === "MANUFACTURER"
-  );
-  $("#transferRetailer").hidden = state.user?.role !== "DISTRIBUTOR";
-  $("#transferRetailer").disabled = !(
-    state.user?.role === "DISTRIBUTOR" &&
-    state.activeStage === "DISTRIBUTOR" && summary.status === "APPROVED" && product?.current_stage === "DISTRIBUTOR"
-  );
-}
-
-$$('.demo-account').forEach((button) => button.addEventListener("click", () => {
-  $("#loginUsername").value = button.dataset.username;
-  $("#loginPassword").value = "OriginDemo2026!";
-  $("#loginButton").focus();
-}));
-
-$("#loginForm").addEventListener("submit", (event) => {
-  event.preventDefault();
-  withButton(event.submitter || $("#loginButton"), "Signing in…", async () => {
-    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
-    try {
-      const result = await api("/api/auth/login", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-      });
-      await beginSession(result.access_token, result.user);
-      showFeedback("Signed in", `${result.user.display_name} · ${label(result.user.role)}`, "success");
-      $("#dashboard").scrollIntoView({ behavior: "smooth" });
-    } catch (error) { reportError(error, "Sign in failed"); }
-  });
-});
-
-$("#logoutButton").addEventListener("click", () => {
-  showLoggedOut("You have signed out of the operational workspace.");
-  $("#loginPassword").value = "";
-  $("#access").scrollIntoView({ behavior: "smooth" });
-});
+$("#openMaterialForm").addEventListener("click", () => $("#materialDialog").showModal());
+$("#openProductForm").addEventListener("click", () => { renderMaterialChoices(); $("#productDialog").showModal(); });
+$$("dialog [data-close]").forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
 
 $("#materialForm").addEventListener("submit", (event) => {
   event.preventDefault();
   withButton(event.submitter || $("#registerMaterialButton"), "Registering…", async () => {
-    const payload = nullifyBlankFields(
-      Object.fromEntries(new FormData(event.currentTarget).entries()),
-      ["manufacturing_date", "expiry_retest_date", "country_source", "notes"],
-    );
+    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+    ["expiry_retest_date", "country_source", "notes"].forEach((field) => { if (payload[field] === "") payload[field] = null; });
     payload.quantity = Number(payload.quantity);
     try {
-      const created = await api("/api/raw-materials", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-      });
+      const created = await api("/api/raw-materials", json(payload));
+      $("#materialDialog").close();
       await refreshRecords(); await refreshDashboard();
-      showFeedback("Material batch registered", `${created.material_name} · ${created.internal_batch_id}. Complete supplier quality checks next.`, "success");
       await selectQuality("RAW_MATERIAL_SUPPLIER", "RAW_MATERIAL", created.id);
-      $("#operations").scrollIntoView({ behavior: "smooth" });
-    } catch (error) { reportError(error, "Material registration failed"); }
+      showFeedback("Material registered", `${created.material_name} · now complete its 5 checks.`, "success");
+      go("quality");
+    } catch (error) { reportError(error, "Registration failed"); }
   });
 });
 
 $("#productForm").addEventListener("submit", (event) => {
   event.preventDefault();
-  withButton(event.submitter || $("#registerProductButton"), "Registering on blockchain…", async () => {
-    const payload = nullifyBlankFields(
-      Object.fromEntries(new FormData(event.currentTarget).entries()),
-      ["manufactured_date", "expiry_date"],
-    );
-    payload.name = "Aurelia Prestige Renewal Serum";
-    payload.brand = "Aurelia Maison";
-    payload.description = "Luxury anti-aging facial serum demonstration batch";
-    payload.raw_material_batch_ids = $$("#materialChoices input:checked").map((input) => input.value);
+  withButton(event.submitter || $("#registerProductButton"), "Writing to blockchain…", async () => {
+    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+    ["manufactured_date", "expiry_date"].forEach((field) => { if (payload[field] === "") payload[field] = null; });
+    Object.assign(payload, {
+      name: "Aurelia Prestige Renewal Serum", brand: "Aurelia Maison",
+      description: "Luxury anti-aging facial serum demonstration batch",
+      raw_material_batch_ids: $$("#materialChoices input:checked").map((input) => input.value),
+    });
     if (!payload.raw_material_batch_ids.length) {
-      showFeedback("Select an approved material", "At least one eligible raw-material batch is required.", "warning");
+      showFeedback("Pick an approved material", "", "warning");
       return;
     }
     try {
-      const created = await api("/api/products/register", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-      });
+      const created = await api("/api/products/register", json(payload));
+      $("#productDialog").close();
       await refreshRecords(); await refreshDashboard();
-      showFeedback("Serum batch registered", "The product and raw-material lineage commitments are now recorded.", "success");
       await selectQuality("MANUFACTURER", "PRODUCT", created.product_code);
-      $("#operations").scrollIntoView({ behavior: "smooth" });
-    } catch (error) { reportError(error, "Finished-batch registration failed"); }
+      showFeedback("Batch registered on-chain", "Now complete the manufacturing checks.", "success");
+      go("quality");
+    } catch (error) { reportError(error, "Registration failed"); }
   });
 });
 
-async function selectQuality(stage, type, id) {
-  state.activeStage = stage; state.contextType = type; state.contextId = id; state.activeSummary = null;
+/* ---------- Quality board ---------- */
+// The server hides issuer-verification details of other stages' evidence from downstream roles.
+// When that field is absent, the server's own gate already accepted the file, so treat it as accepted.
+function issuerAccepted(item) {
+  return item.verification_status === "VERIFIED_DEMO" || item.verification_status == null;
+}
+function validEvidence(check) {
+  return (check.evidence || []).filter((item) => item.integrity === "VERIFIED"
+    && (!check.trusted_issuer_required || issuerAccepted(item)));
+}
+function checkComplete(check) {
+  return check.result === "PASS" && (!check.evidence_required || validEvidence(check).length > 0);
+}
+
+function renderEmptyBoard(message = "Pick a stage above to see its five checks.") {
+  state.activeSummary = null;
+  $("#qualityChecks").innerHTML = `<div class="empty-state board-empty">${esc(message)}</div>`;
+  $("#qualityContext").textContent = "No batch selected.";
+  $("#qualitySummary").innerHTML = '<span id="qualityContext" class="muted">No batch selected.</span>';
+  $("#blockingPanel").className = "blockers muted";
+  $("#blockingPanel").textContent = "Nothing to approve yet.";
   updateControls();
+}
+
+async function selectQuality(stage, type, id) {
+  Object.assign(state, { activeStage: stage, contextType: type, contextId: id, activeSummary: null, boardEnter: true });
   $$(".stage-tabs button").forEach((button) => {
     const active = button.dataset.stage === stage;
-    button.classList.toggle("active", active); button.setAttribute("aria-pressed", String(active));
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
   });
-  const context = type === "RAW_MATERIAL"
-    ? state.materials.find((item) => item.id === id)
-    : state.products.find((item) => item.product_code === id);
-  const linked = type === "PRODUCT" ? context?.linked_raw_materials || [] : [];
-  const spec = type === "PRODUCT" ? context?.product_specification : null;
-  $("#qualityContext").innerHTML = `<strong>${esc(STAGE_NAMES[stage])}</strong> · ${esc(context?.material_name || context?.name || id)} · ${esc(context?.internal_batch_id || context?.batch_number || "")}${spec ? `<br><small>Reference Specification: ${esc(spec.specification_name)} · v${esc(spec.version)}</small>` : ""}${linked.length ? `<br><small>Linked approved materials: ${linked.map((item) => `${esc(item.material_name)} (${esc(item.internal_batch_id)})`).join(", ")}</small>` : ""}`;
+  updateControls();
   await renderQuality();
 }
 
-function evidenceSatisfiesGate(check, item) {
-  return item.integrity === "VERIFIED" && (!check.trusted_issuer_required || item.verification_status === "VERIFIED_DEMO");
+function infoPopover(check) {
+  const sources = (check.sources || []).map((source) => `<a href="${esc(source.source_url)}" target="_blank" rel="noopener noreferrer">${esc(source.source_code.replaceAll("_", " "))}</a>`).join(" · ");
+  return `<details class="info"><summary aria-label="Why this check exists">i</summary><div class="info-pop">
+    <span><strong>Why:</strong> ${esc(check.requirement_rationale)}</span>
+    <span><strong>Evidence:</strong> ${esc(check.evidence_expectation)}</span>
+    ${sources ? `<span><strong>Source:</strong> ${sources}</span>` : ""}
+    <small>Explains why evidence is requested. Not a certification.</small></div></details>`;
 }
 
-function checkComplete(check) {
-  const validEvidence = !check.evidence_required || (check.evidence || []).some((item) => evidenceSatisfiesGate(check, item));
-  return check.result === "PASS" && validEvidence;
+function evidenceRow(check, writable) {
+  const files = check.evidence || [];
+  const chips = files.length
+    ? files.slice(-2).map((item) => {
+        const ok = item.integrity === "VERIFIED" && (!check.trusted_issuer_required || issuerAccepted(item));
+        return `<span class="file-chip ${ok ? "ok" : "bad"}" title="${esc(item.original_filename)} · integrity ${esc(label(item.integrity))}${item.issuer ? ` · ${esc(item.issuer.issuer_name)}` : ""}">${ok ? "✓" : "!"} <span>${esc(item.original_filename)}</span></span>`;
+      }).join("")
+    : '<span class="file-chip bad">No file yet</span>';
+  const upload = writable ? `<button class="btn btn-ghost btn-sm upload-evidence" type="button" data-standard="${check.standard_id}">${files.length ? "Add file" : "Upload"}</button>` : "";
+  return `<div class="check-meta">${chips}${upload}</div>`;
 }
 
-function categoryMarkup(category, checks) {
-  const required = checks.filter((check) => check.required);
-  const complete = required.filter(checkComplete).length;
-  const failed = checks.filter((check) => check.result === "FAIL").length;
-  const missingEvidence = checks.filter((check) => check.evidence_required && !(check.evidence || []).some((item) => evidenceSatisfiesGate(check, item))).length;
-  const status = failed ? "Needs Attention" : complete === required.length ? "Complete" : "In Progress";
-  const statusClass = failed ? "HOLD" : complete === required.length ? "APPROVED" : "PENDING";
-  const details = [failed ? `${failed} failed` : "", missingEvidence ? `${missingEvidence} missing evidence` : ""].filter(Boolean).join(" · ");
-  return `<section class="quality-category"><header class="category-head"><div><h3>${esc(category)}</h3><p>${complete} of ${required.length} required checks complete${details ? ` · ${esc(details)}` : ""}</p></div><span class="status ${statusClass}">${status}</span></header>${checks.map(checkRow).join("")}</section>`;
+function checkCard(check, writable) {
+  const tone = check.result === "FAIL" ? "fail" : checkComplete(check) ? "pass" : "";
+  const toggle = writable
+    ? `<div class="result-toggle" role="group" aria-label="Result for ${esc(check.check_name)}">
+        ${["PASS", "FAIL"].map((value) => `<button type="button" data-result="${value}" data-standard="${check.standard_id}" aria-pressed="${check.result === value}">${value === "PASS" ? "Pass" : "Fail"}</button>`).join("")}
+      </div>
+      <input class="note-input check-note" data-standard="${check.standard_id}" placeholder="Note (optional)" value="${esc(check.notes || "")}" aria-label="Note for ${esc(check.check_name)}">`
+    : `${pill(check.result || "PENDING")}${check.notes ? `<small class="check-note-read" title="${esc(check.notes)}">${esc(check.notes)}</small>` : ""}`;
+  return `<article class="glass check-card ${tone}" data-standard="${check.standard_id}">
+    <div class="check-top"><div><h3>${esc(check.check_name)}</h3><p>${esc(check.requirement)}</p></div>${infoPopover(check)}</div>
+    ${check.evidence_required ? evidenceRow(check, writable) : ""}
+    <div class="check-actions">${toggle}</div>
+  </article>`;
 }
 
-function evidenceMarkup(check) {
-  if (!(check.evidence || []).length) {
-    return check.evidence_required ? '<div class="evidence-missing">Evidence required · none uploaded</div>' : "";
-  }
-  return `<div class="evidence-list">${check.evidence.map((item) => `<div class="evidence-item">
-    <span class="evidence-name">${esc(item.original_filename)}</span>
-    <span>${esc(label(item.document_type || "OTHER"))}${item.report_reference ? ` · ${esc(item.report_reference)}` : ""}</span>
-    <span>File Integrity: <b class="status ${esc(item.integrity)}">${esc(label(item.integrity))}</b></span>
-    ${item.issuer ? `<span>Issuer: ${esc(item.issuer.issuer_name)}</span><span>Evidence Verification: <b class="status ${esc(item.verification_status)}">${esc(label(item.verification_status))}</b></span>${item.issuer.current_trust_status && item.issuer.current_trust_status !== item.issuer.trust_status_at_submission ? `<span class="trust-warning">Accepted as ${esc(label(item.issuer.trust_status_at_submission))}; current issuer status ${esc(label(item.issuer.current_trust_status))}</span>` : ""}` : '<span>Issuer: Not recorded</span>'}
-    <span>${esc(label(item.visibility))}</span>
-  </div>`).join("")}</div>`;
-}
-
-function sourceTraceabilityMarkup(check) {
-  const sources = check.sources || [];
-  const badges = `<span class="requirement-badge ${esc(check.classification)}">${esc(label(check.classification))}</span>${sources.map((source) => `<span class="source-badge ${esc(source.status)}">${esc(source.source_code)}</span>`).join("")}`;
-  const sourceRows = sources.length ? sources.map((source) => `<li><a href="${esc(source.source_url)}" target="_blank" rel="noopener noreferrer">${esc(source.source_code)} · ${esc(source.edition)}</a><span class="status ${esc(source.status)}">${esc(label(source.status))}</span><small>${esc(label(source.mapping_precision))}${source.last_verified_at ? ` · verified ${esc(source.last_verified_at)}` : ""}${source.snapshotted_at ? ` · frozen ${esc(source.snapshotted_at)}` : ""}</small></li>`).join("") : '<li><span>No external source mapping.</span><small>This is an explicitly internal OriginChain or organization gate.</small></li>';
-  const specRows = (check.specification_requirements || []).map((item) => `<li><span><strong>Product Specification v${esc(item.specification_version)}</strong> · ${esc(item.description)}</span><small>Expected: ${esc(item.expected_characteristic)}</small></li>`).join("");
-  return `<div class="source-badges">${badges}</div><details class="requirement-details"><summary>Requirement rationale & source traceability</summary><p><strong>Why this gate exists</strong><br>${esc(check.requirement_rationale)}</p><p><strong>Expected evidence</strong><br>${esc(check.evidence_expectation)}</p>${check.package_component ? `<p><strong>Structured visual context</strong><br>${esc(check.package_component)} · ${esc(check.expected_visual_characteristic || "Organization-defined")}${check.defect_categories?.length ? `<br>Defect categories: ${check.defect_categories.map(esc).join(", ")}` : ""}</p>` : ""}${specRows ? `<ul class="spec-reference">${specRows}</ul>` : ""}<ul>${sourceRows}</ul><small>A mapping records evidence relevance; it does not certify compliance.</small></details>`;
-}
-
-function documentTypeOptions(selected) {
-  return DOCUMENT_TYPES.map((value) => `<option value="${value}" ${selected === value ? "selected" : ""}>${esc(label(value))}</option>`).join("");
-}
-
-function issuerOptions(check) {
-  const selectedCode = check.expected_document_type === "CERTIFICATE_OF_ANALYSIS"
-    ? "LUMINA_ACTIVES"
-    : ["MICROBIOLOGY_REPORT", "PRESERVATIVE_EFFICACY_REPORT"].includes(check.expected_document_type)
-      ? "AURELIA_QC_LAB_DEMO" : "";
-  return `<option value="">No issuer recorded</option>${state.evidenceIssuers.map((issuer) => `<option value="${esc(issuer.issuer_code)}" ${issuer.issuer_code === selectedCode ? "selected" : ""}>${esc(issuer.issuer_name)} · ${esc(label(issuer.trust_status))}</option>`).join("")}`;
-}
-
-function checkRow(check) {
-  const stateClass = check.result === "FAIL" ? "failed" : checkComplete(check) ? "complete" : "";
-  const id = `check-${check.standard_id}`;
-  if (!canWriteStage(state.activeStage)) {
-    return `<div class="check-row readonly ${stateClass}" data-standard="${check.standard_id}">
-      <div><strong>${esc(check.check_name)}</strong><small>${esc(check.requirement)}</small>${sourceTraceabilityMarkup(check)}
-        ${check.evidence_required ? '<small>Evidence required for the responsible stage actor</small>' : ""}${evidenceMarkup(check)}</div>
-      <div><small>Recorded result</small><span class="status ${esc(check.result)}">${esc(label(check.result))}</span></div>
-      <div><small>Inspection note</small><span>${check.notes ? esc(check.notes) : "Restricted or not recorded"}</span></div>
-    </div>`;
-  }
-  return `<div class="check-row ${stateClass}" data-standard="${check.standard_id}">
-    <div><strong>${esc(check.check_name)}</strong><small>${esc(check.requirement)}</small>${sourceTraceabilityMarkup(check)}
-      ${check.evidence_required ? '<small>Evidence required · PDF, PNG or JPEG · maximum 5 MiB</small>' : '<small>Supporting evidence optional</small>'}${evidenceMarkup(check)}</div>
-    <label for="${id}-result">Inspection result<select id="${id}-result" class="check-result">
-      ${["PENDING", "PASS", "FAIL", "NOT_APPLICABLE"].map((value) => `<option value="${value}" ${check.result === value ? "selected" : ""}>${esc(label(value))}</option>`).join("")}
-    </select></label>
-    <div class="check-actions"><label for="${id}-note">Inspection note<input id="${id}-note" class="check-note" placeholder="Brief finding or corrective note" value="${esc(check.notes || "")}"></label>
-      ${check.evidence_required ? `<label>Document type<select class="check-document-type">${documentTypeOptions(check.expected_document_type)}</select></label><label for="${id}-file">Supporting evidence<input id="${id}-file" class="check-file" type="file" accept=".pdf,.png,.jpg,.jpeg"></label><div class="evidence-metadata"><label>Registered issuer<select class="check-issuer">${issuerOptions(check)}</select></label><label>Issuer report number<input class="check-issuer-report" maxlength="160" placeholder="${check.trusted_issuer_required ? "Required for trusted evidence" : "Optional"}"></label><label>Issuer document date<input class="check-issuer-date" type="date"></label><label>Laboratory name on document<input class="check-laboratory" maxlength="180" placeholder="Optional document metadata"></label><label>Report reference<input class="check-report-reference" maxlength="120" placeholder="Optional document identifier"></label><label>Test date<input class="check-test-date" type="date"></label><label>Test-method source<select class="check-test-method"><option value="">Not stated</option>${(check.sources || []).map((source) => `<option value="${esc(source.source_code)}">${esc(source.source_code)}</option>`).join("")}</select></label></div>${check.trusted_issuer_required ? '<small>Trusted Demo issuer and report number required. This is local workflow acceptance, not certification or accreditation.</small>' : ""}<label class="visibility-control"><input class="check-public" type="checkbox"> Visible to Consumer</label>` : ""}
-      <button class="save-check" data-standard="${check.standard_id}">Save inspection</button></div>
-  </div>`;
-}
-
-function renderQualitySummary(summary) {
-  const evidence = summary.checks.flatMap((check) => check.evidence || []);
-  const verified = evidence.filter((item) => item.integrity === "VERIFIED").length;
-  $("#qualitySummary").className = "quality-summary";
-  $("#qualitySummary").innerHTML = `<div><small>Stage status</small><strong><span class="status ${esc(summary.status)}">${esc(label(summary.status))}</span></strong></div>
-    <div><small>Required checks</small><strong>${summary.required_passed} of ${summary.required_total} passed</strong></div>
-    <div><small>Blocking issues</small><strong>${summary.blocking_reasons.length}</strong></div>
-    <div><small>Evidence integrity</small><strong>${verified} of ${evidence.length} verified</strong></div>`;
+function renderSummaryBar(summary) {
+  const pct = summary.required_total ? Math.round((summary.required_passed / summary.required_total) * 100) : 0;
+  const context = state.contextType === "RAW_MATERIAL"
+    ? state.materials.find((item) => item.id === state.contextId)
+    : state.products.find((item) => item.product_code === state.contextId);
+  const materialPicker = state.contextType === "RAW_MATERIAL" && state.materials.length > 1
+    ? `<select id="materialPicker" aria-label="Material">${state.materials.map((item) => `<option value="${esc(item.id)}" ${item.id === state.contextId ? "selected" : ""}>${esc(item.material_name)} · ${esc(item.internal_batch_id)}</option>`).join("")}</select>`
+    : `<span id="qualityContext" class="muted">${esc(context?.material_name || context?.name || state.contextId)} · ${esc(context?.internal_batch_id || context?.batch_number || "")}</span>`;
+  $("#qualitySummary").innerHTML = `${materialPicker}
+    <span class="ring ${summary.status === "APPROVED" ? "ok" : ""}" style="--p:${pct}"><span>${summary.required_passed}/${summary.required_total}</span></span>
+    ${pill(stageStatus(summary))}`;
+  countUp($("#qualitySummary .ring span"), summary.required_passed, `/${summary.required_total}`);
+  $("#materialPicker")?.addEventListener("change", (event) => selectQuality("RAW_MATERIAL_SUPPLIER", "RAW_MATERIAL", event.target.value));
   const blockers = $("#blockingPanel");
-  if (summary.blocking_reasons.length) {
-    blockers.classList.remove("hidden");
-    blockers.innerHTML = `<strong>${summary.display_name} cannot be approved yet.</strong><span>${summary.blocking_reasons.length} requirement${summary.blocking_reasons.length === 1 ? "" : "s"} need attention:</span><ul>${summary.blocking_reasons.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>`;
+  if (summary.status === "APPROVED") {
+    blockers.className = "blockers ok"; blockers.textContent = "✓ Stage approved and sealed.";
+  } else if (summary.blocking_reasons.length) {
+    blockers.className = "blockers bad";
+    blockers.innerHTML = `<details><summary>${summary.blocking_reasons.length} thing${summary.blocking_reasons.length === 1 ? "" : "s"} to fix · show</summary><ul>${summary.blocking_reasons.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></details>`;
   } else {
-    blockers.classList.add("hidden"); blockers.innerHTML = "";
+    blockers.className = "blockers ok"; blockers.textContent = "All five done. Ready to approve.";
   }
 }
 
 async function renderQuality() {
-  if (!state.activeStage || !state.contextId) return;
-  $("#qualityChecks").className = "quality-checks empty-state";
-  $("#qualityChecks").textContent = "Loading quality standards and inspection state…";
-  $("#qualityChecks").setAttribute("aria-busy", "true");
+  if (!state.activeStage || !state.contextId) return renderEmptyBoard();
+  const board = $("#qualityChecks");
+  board.setAttribute("aria-busy", "true");
+  if (state.boardEnter) board.innerHTML = skeletonBoard();
   try {
     const summary = await api(`/api/quality/${state.contextType}/${encodeURIComponent(state.contextId)}/summary?stage=${state.activeStage}`);
     state.activeSummary = summary;
-    const groups = summary.checks.reduce((result, check) => {
-      (result[check.category] ||= []).push(check); return result;
-    }, {});
-    renderQualitySummary(summary);
-    $("#qualityChecks").className = "quality-checks";
-    $("#qualityChecks").innerHTML = Object.entries(groups).map(([category, checks]) => categoryMarkup(category, checks)).join("");
-    $$(".save-check").forEach((button) => button.addEventListener("click", () => saveCheck(button)));
+    const writable = canWriteStage(state.activeStage);
+    board.innerHTML = LANES.map((lane) => {
+      const checks = summary.checks.filter((check) => check.category === lane.category);
+      const done = checks.filter(checkComplete).length;
+      return `<section class="lane ${lane.category === "Final review" ? "lane-final" : ""}">
+        <div class="lane-head"><span class="kind ${lane.cls}">${esc(lane.label)}</span><small class="muted">${esc(lane.hint)}</small><span class="count">${done}/${checks.length}</span></div>
+        ${checks.map((check) => checkCard(check, writable)).join("") || '<div class="empty-state">None.</div>'}
+      </section>`;
+    }).join("");
+    board.classList.toggle("entering", state.boardEnter);
+    state.boardEnter = false;
+    if (state.changedStandard) {
+      board.querySelector(`.check-card[data-standard="${state.changedStandard}"]`)?.classList.add("just-changed");
+      state.changedStandard = null;
+    }
+    renderSummaryBar(summary);
+    bindBoard();
     updateControls();
   } catch (error) {
-    $("#qualityChecks").className = "quality-checks empty-state";
-    $("#qualityChecks").textContent = "Quality checks could not be loaded. Review the message above and retry.";
-    reportError(error, "Quality state could not be loaded");
-  } finally { $("#qualityChecks").removeAttribute("aria-busy"); }
+    board.innerHTML = '<div class="empty-state board-empty">Checks could not be loaded.</div>';
+    reportError(error, "Checks unavailable");
+  } finally { board.removeAttribute("aria-busy"); }
 }
 
-async function saveCheck(button) {
-  const row = button.closest(".check-row");
-  const standardId = Number(button.dataset.standard);
-  await withButton(button, "Saving…", async () => {
+function findCheck(standardId) {
+  return state.activeSummary?.checks.find((check) => String(check.standard_id) === String(standardId));
+}
+
+function bindBoard() {
+  $$("#qualityChecks .result-toggle button").forEach((button) => button.addEventListener("click", () => {
+    const check = findCheck(button.dataset.standard);
+    const next = check.result === button.dataset.result ? "PENDING" : button.dataset.result;
+    const note = button.closest(".check-card").querySelector(".check-note")?.value || null;
+    saveResult(check, next, note, button);
+  }));
+  $$("#qualityChecks .check-note").forEach((input) => input.addEventListener("change", () => {
+    const check = findCheck(input.dataset.standard);
+    saveResult(check, check.result || "PENDING", input.value || null, null);
+  }));
+  $$("#qualityChecks .upload-evidence").forEach((button) => button.addEventListener("click", () => openEvidence(findCheck(button.dataset.standard))));
+  $$("#qualityChecks .info").forEach((details) => details.addEventListener("toggle", () => {
+    if (details.open) $$("#qualityChecks .info").forEach((other) => { if (other !== details) other.open = false; });
+  }));
+}
+
+async function postResult(check, result, notes) {
+  return api("/api/quality/results", json({
+    context_type: state.contextType, context_id: state.contextId,
+    standard_id: check.standard_id, result, notes,
+  }));
+}
+
+async function saveResult(check, result, notes, button) {
+  const work = async () => {
     try {
-      const result = await api("/api/quality/results", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-          context_type: state.contextType, context_id: state.contextId, standard_id: standardId,
-          result: row.querySelector(".check-result").value,
-          notes: row.querySelector(".check-note").value || null,
-        }),
-      });
-      const file = row.querySelector(".check-file")?.files[0];
-      if (file) {
-        const data = new FormData(); data.append("file", file);
-        data.append("visibility", row.querySelector(".check-public")?.checked ? "CONSUMER_VISIBLE" : "INTERNAL");
-        data.append("document_type", row.querySelector(".check-document-type")?.value || "OTHER");
-        const optionalEvidenceFields = {
-          laboratory_name: ".check-laboratory", report_reference: ".check-report-reference",
-          test_date: ".check-test-date", test_method_source_code: ".check-test-method",
-          issuer_code: ".check-issuer", issuer_report_number: ".check-issuer-report",
-          issuer_document_date: ".check-issuer-date",
-        };
-        Object.entries(optionalEvidenceFields).forEach(([name, selector]) => {
-          const value = row.querySelector(selector)?.value?.trim(); if (value) data.append(name, value);
-        });
-        await api(`/api/quality/results/${result.id}/evidence`, { method: "POST", body: data });
-      }
-      showFeedback("Inspection saved", file ? "The result and evidence commitment were recorded." : "The quality result was updated.", "success");
-      await refreshRecords(); await renderQuality(); await refreshDashboard();
-    } catch (error) { reportError(error, "Inspection could not be saved"); }
-  });
+      await postResult(check, result, notes);
+      state.changedStandard = check.standard_id;
+      if (result === "FAIL") showFeedback("Marked as failed", `${check.check_name} · the stage is now on hold.`, "warning");
+      await refreshAfterChange();
+    } catch (error) { reportError(error, "Couldn't save"); }
+  };
+  if (button) await withButton(button, "", work); else await work();
 }
 
-$("#approveStage").addEventListener("click", (event) => withButton(event.currentTarget, "Checking requirements…", async () => {
-  try {
-    await api("/api/quality/stages/approve", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-        context_type: state.contextType, context_id: state.contextId, stage: state.activeStage,
-      }),
-    });
-    showFeedback(`${STAGE_NAMES[state.activeStage]} approved`, "The stage commitment is recorded and the next workflow action is now available.", "success");
-  } catch (error) { reportError(error, `${STAGE_NAMES[state.activeStage]} cannot be approved yet`); }
+async function refreshAfterChange() {
   await refreshRecords(); await renderQuality(); await refreshDashboard();
+}
+
+function openEvidence(check) {
+  state.evidenceCheck = check;
+  $("#evidenceTitle").textContent = check.check_name;
+  $("#evidenceHint").textContent = check.trusted_issuer_required
+    ? `${label(check.expected_document_type)} from a trusted issuer, with its report number.`
+    : `${label(check.expected_document_type)}. The file's fingerprint is recorded on-chain.`;
+  const preset = check.expected_document_type === "CERTIFICATE_OF_ANALYSIS" ? "LUMINA_ACTIVES" : "AURELIA_QC_LAB_DEMO";
+  $("#evidenceIssuer").innerHTML = state.evidenceIssuers.map((issuer) =>
+    `<option value="${esc(issuer.issuer_code)}" ${issuer.issuer_code === preset ? "selected" : ""}>${esc(issuer.issuer_name)} · ${esc(label(issuer.trust_status))}</option>`).join("");
+  $("#issuerField").classList.toggle("hidden", !check.trusted_issuer_required);
+  $("#reportField").classList.toggle("hidden", !check.trusted_issuer_required);
+  $("#evidenceReport").required = Boolean(check.trusted_issuer_required);
+  $("#evidenceForm").reset();
+  if (check.trusted_issuer_required) $("#evidenceIssuer").value = preset;
+  $("#evidencePublic").checked = state.activeStage === "RETAILER";
+  $("#evidenceDialog").showModal();
+}
+
+$("#evidenceForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const check = state.evidenceCheck;
+  withButton($("#evidenceSubmit"), "Uploading…", async () => {
+    try {
+      let resultId = check.result_id;
+      if (!resultId) resultId = (await postResult(check, check.result || "PENDING", check.notes || null)).id;
+      const data = new FormData();
+      data.append("file", $("#evidenceFile").files[0]);
+      data.append("visibility", $("#evidencePublic").checked ? "CONSUMER_VISIBLE" : "INTERNAL");
+      data.append("document_type", check.expected_document_type || "OTHER");
+      if (check.trusted_issuer_required) {
+        data.append("issuer_code", $("#evidenceIssuer").value);
+        data.append("issuer_report_number", $("#evidenceReport").value.trim());
+      }
+      if ($("#evidenceDate").value) data.append("issuer_document_date", $("#evidenceDate").value);
+      await api(`/api/quality/results/${resultId}/evidence`, { method: "POST", body: data });
+      $("#evidenceDialog").close();
+      showFeedback("File uploaded", "Fingerprint recorded. Mark the check as Pass when you're satisfied.", "success");
+      await refreshAfterChange();
+    } catch (error) { reportError(error, "Upload failed"); }
+  });
+});
+
+$("#approveStage").addEventListener("click", (event) => withButton(event.currentTarget, "Sealing…", async () => {
+  try {
+    await api("/api/quality/stages/approve", json({ context_type: state.contextType, context_id: state.contextId, stage: state.activeStage }));
+    showFeedback(`${STAGE_NAMES[state.activeStage]} approved`, state.activeStage === "RETAILER" ? "Approved for sale and sealed on the blockchain." : "Sealed on the blockchain.", "success");
+    celebrate($("#approveStage"), state.activeStage === "RETAILER" ? 140 : 70);
+  } catch (error) { reportError(error, "Can't approve yet"); }
+  await refreshAfterChange();
 }));
 
-$$(`.stage-tabs button`).forEach((button) => button.addEventListener("click", async () => {
+$$(".stage-tabs button").forEach((button) => button.addEventListener("click", async () => {
   const stage = button.dataset.stage;
   if (stage === "RAW_MATERIAL_SUPPLIER") {
-    if (!state.materials.length) return showFeedback("No raw-material batch selected", "Register the first supplier batch before opening QC.", "warning");
+    if (!state.materials.length) return showFeedback("No raw material yet", "Register one under Batches.", "warning");
     await selectQuality(stage, "RAW_MATERIAL", state.materials[0].id);
   } else {
     const product = currentProduct();
-    if (!product) return showFeedback("No finished batch registered", "Approve raw materials and register the serum batch first.", "warning");
+    if (!product) return showFeedback("No finished batch yet", "The manufacturer registers it under Batches.", "warning");
     await selectQuality(stage, "PRODUCT", product.product_code);
   }
 }));
@@ -720,89 +706,279 @@ $$(`.stage-tabs button`).forEach((button) => button.addEventListener("click", as
 async function transfer(role, button) {
   const product = currentProduct();
   if (!product) return;
-  await withButton(button, "Recording transfer…", async () => {
+  await withButton(button, "Recording on-chain…", async () => {
     try {
-      await api("/api/ownership-transfers", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ product_code: product.product_code, to_role: role }),
-      });
-      showFeedback(`Transferred to ${label(role)}`, `Custody is recorded on-chain. Complete ${label(role)} quality checks next.`, "success");
+      await api("/api/ownership-transfers", json({ product_code: product.product_code, to_role: role }));
+      showFeedback(`Sent to ${label(role)}`, "Custody change recorded on the blockchain.", "success");
       await refreshHealth(); await refreshRecords(); await refreshDashboard();
       await selectQuality(role, "PRODUCT", product.product_code);
-    } catch (error) { reportError(error, `Transfer to ${label(role)} is blocked`); }
+    } catch (error) { reportError(error, "Transfer blocked"); }
   });
 }
 $("#transferDistributor").addEventListener("click", (event) => transfer("DISTRIBUTOR", event.currentTarget));
 $("#transferRetailer").addEventListener("click", (event) => transfer("RETAILER", event.currentTarget));
 
-function publicEvidenceMarkup(items) {
-  if (!items.length) return '<div class="empty-state">No evidence has been marked visible to consumers.</div>';
-  return `<div class="public-evidence">${items.map((item) => `<article><strong>${esc(item.filename)}</strong><small>${esc(item.check_name)} · ${esc(STAGE_NAMES[item.stage] || label(item.stage))} · ${esc(label(item.document_type || "OTHER"))}</small>${item.issuer_name ? `<small>Issuer: ${esc(item.issuer_name)}</small>` : ""}<span class="status ${esc(item.integrity)}">Integrity: ${esc(label(item.integrity))}</span> <span>Visible to Consumer</span></article>`).join("")}</div>`;
+function updateControls() {
+  const product = currentProduct();
+  const role = state.user?.role;
+  $("#openProductForm").classList.toggle("hidden", role !== "MANUFACTURER" || Boolean(product));
+  $("#openProductForm").disabled = !eligibleMaterials().length;
+  $("#registerProductButton").disabled = role !== "MANUFACTURER" || Boolean(product) || !eligibleMaterials().length;
+  $("#registerMaterialButton").disabled = role !== "RAW_MATERIAL_SUPPLIER";
+  const approvedStages = new Set(state.journey.filter((item) => item.status === "APPROVED").map((item) => item.stage));
+  $$(".stage-tabs button").forEach((button) => {
+    button.hidden = !canViewStage(button.dataset.stage);
+    button.disabled = button.dataset.stage === "RAW_MATERIAL_SUPPLIER" ? !state.materials.length : !product;
+    button.classList.toggle("done", approvedStages.has(button.dataset.stage) && !button.classList.contains("active"));
+  });
+  const autoFill = $("#demoAutofillButton");
+  autoFill.disabled = !state.demoMode || !OPERATIONAL_ROLES.includes(role);
+  autoFill.textContent = role === "RETAILER" && product?.final_sale_status === "HOLD" ? "Fix the HOLD (auto-fill)" : "Auto-fill my checks";
+  $("#demoHoldButton").disabled = !state.demoMode || role !== "RETAILER" || product?.current_stage !== "RETAILER";
+  const complete = product?.final_sale_status === "APPROVED_FOR_SALE";
+  $("#loadPresentationButton").disabled = role !== "ADMIN" || complete;
+  $("#loadPresentationButton").textContent = complete ? "Full demo loaded ✓" : product ? "Finish the demo" : "Load full demo";
+  $("#tamperButton").disabled = role !== "ADMIN" || !product || state.verification?.status === "SUSPICIOUS";
+  const summary = state.activeSummary;
+  const approve = $("#approveStage");
+  approve.hidden = !state.activeStage || !canWriteStage(state.activeStage);
+  approve.disabled = !summary || summary.status === "APPROVED" || !summary.eligible_for_approval;
+  approve.textContent = summary?.status === "APPROVED" ? "Approved ✓" : `Approve ${STAGE_NAMES[state.activeStage] || "stage"}`;
+  const toDistributor = $("#transferDistributor");
+  toDistributor.hidden = role !== "MANUFACTURER";
+  toDistributor.disabled = !(summary && state.activeStage === "MANUFACTURER" && summary.status === "APPROVED" && product?.current_stage === "MANUFACTURER");
+  const toRetailer = $("#transferRetailer");
+  toRetailer.hidden = role !== "DISTRIBUTOR";
+  toRetailer.disabled = !(summary && state.activeStage === "DISTRIBUTOR" && summary.status === "APPROVED" && product?.current_stage === "DISTRIBUTOR");
 }
 
+/* ---------- Overview ---------- */
+async function operationalJourney(product) {
+  const linked = product?.linked_raw_materials || [];
+  const pool = linked.length ? linked : state.materials;
+  const rawApproved = pool.length > 0 && pool.every((item) => item.quality_status === "APPROVED" && !isExpired(item.expiry_retest_date));
+  const journey = [{
+    stage: "RAW_MATERIAL_SUPPLIER", display_name: "Raw Materials", status: rawApproved ? "APPROVED" : "PENDING",
+    required_passed: rawApproved ? 5 : 0, required_total: 5,
+  }];
+  const rawSource = linked[0]?.id || state.materials[0]?.id;
+  if (rawSource && canViewStage("RAW_MATERIAL_SUPPLIER")) {
+    try {
+      const raw = await api(`/api/quality/RAW_MATERIAL/${encodeURIComponent(rawSource)}/summary?stage=RAW_MATERIAL_SUPPLIER`);
+      Object.assign(journey[0], { status: rawApproved ? "APPROVED" : raw.status, eligible_for_approval: raw.eligible_for_approval, required_passed: raw.required_passed, required_total: raw.required_total, checks: raw.checks });
+    } catch (_) { /* permission or not found: keep the estimate */ }
+  }
+  if (!product) {
+    return [...journey, ...STAGES.slice(1).map((stage) => ({ stage, display_name: STAGE_NAMES[stage], status: "PENDING", required_passed: 0, required_total: 5, blocking_reasons: [] }))];
+  }
+  const summaries = await Promise.all(STAGES.slice(1).map((stage) =>
+    api(`/api/quality/PRODUCT/${encodeURIComponent(product.product_code)}/summary?stage=${stage}`)));
+  return [...journey, ...summaries];
+}
+
+function currentStageOf(product, journey) {
+  if (product?.final_sale_status === "APPROVED_FOR_SALE") return "COMPLETE";
+  if (product) return product.current_stage;
+  return journey[0].status === "APPROVED" ? "MANUFACTURER" : "RAW_MATERIAL_SUPPLIER";
+}
+
+function nextStepText(current, journey) {
+  if (current === "COMPLETE") return "Ready for customers to verify";
+  if (current === "RAW_MATERIAL_SUPPLIER") return state.materials.length ? "Supplier completes 5 checks" : "Supplier registers a raw material";
+  if (current === "MANUFACTURER") return !currentProduct() ? "Manufacturer registers the batch" : journey[1].status === "APPROVED" ? "Send to the distributor" : "Manufacturer completes 5 checks";
+  if (current === "DISTRIBUTOR") return journey[2].status === "APPROVED" ? "Send to the retailer" : "Distributor completes 5 checks";
+  return journey[3].status === "HOLD" ? "Retailer fixes the failed check" : "Retailer completes 5 checks";
+}
+
+async function refreshDashboard() {
+  if (!state.user) return;
+  const product = currentProduct();
+  try {
+    const journey = await operationalJourney(product);
+    state.journey = journey;
+    const current = currentStageOf(product, journey);
+    $("#journey").innerHTML = journey.map((item, index) => {
+      const isCurrent = current === item.stage;
+      const status = item.status === "PENDING" && !item.eligible_for_approval && !isCurrent && index > STAGES.indexOf(current) && current !== "COMPLETE" ? "NOT_STARTED" : stageStatus(item);
+      const pct = item.required_total ? Math.round((item.required_passed / item.required_total) * 100) : 0;
+      return `<li class="${String(item.status).toLowerCase()} ${isCurrent ? "current" : ""}">
+        <div class="step-head"><span class="step-num">${item.status === "APPROVED" ? "✓" : index + 1}</span><h3>${esc(STAGE_NAMES[item.stage])}</h3></div>
+        ${pill(status)}
+        <div class="step-meta"><small>${item.required_passed} of ${item.required_total || 5} checks done</small>
+        ${item.commitment_hash && item.status === "APPROVED" ? `<small class="sealed" title="Stage seal (commitment hash)"><b>Seal</b> <span class="mono">${esc(short(item.commitment_hash))}</span></small>` : ""}</div>
+        ${(item.checks || []).length ? `<ul class="step-checks">${item.checks.map((check) => `<li class="${checkComplete(check) ? "ok" : check.result === "FAIL" ? "bad" : ""}"><b>${checkComplete(check) ? "✓" : check.result === "FAIL" ? "×" : "○"}</b>${esc(check.check_name)}</li>`).join("")}</ul>` : ""}
+        <div class="progress"><span style="width:${pct}%"></span></div></li>`;
+    }).join("");
+    renderChainTimeline(product, journey);
+    renderStats(product, journey);
+    $("#overviewBatch").textContent = product ? `${product.batch_number} · ${product.product_code}` : "No batch registered yet";
+    $("#overviewStage").textContent = current === "COMPLETE" ? "On the shelf" : STAGE_NAMES[current];
+    $("#overviewNext").textContent = nextStepText(current, journey);
+    const sale = product?.final_sale_status || "NOT_READY";
+    $("#overviewSale").outerHTML = pill(sale, label(sale), "pill-lg").replace("<span", '<span id="overviewSale"');
+    updateControls();
+  } catch (error) { reportError(error, "Overview couldn't refresh"); }
+}
+
+function renderStats(product, journey) {
+  const passed = journey.reduce((sum, item) => sum + (item.required_passed || 0), 0);
+  const total = journey.reduce((sum, item) => sum + (item.required_total || 5), 0);
+  const certificates = journey.slice(1).flatMap((item) => item.checks || [])
+    .filter((check) => check.evidence_required).reduce((sum, check) => sum + validEvidence(check).length, 0);
+  const days = product?.expiry_date ? Math.ceil((new Date(`${product.expiry_date}T00:00:00`) - new Date()) / 864e5) : null;
+  const tiles = [
+    { value: passed, suffix: ` / ${total}`, label: "Checks passed" },
+    { value: certificates, suffix: " sealed", label: "Certificates" },
+    { value: days ?? 0, suffix: days === null ? "" : " days", label: "Shelf life left", empty: days === null },
+    { text: product ? label(product.current_stage === "RETAILER" && product.final_sale_status === "APPROVED_FOR_SALE" ? "RETAILER" : product.current_stage) : "—", label: "Held by" },
+  ];
+  $("#overviewStats").innerHTML = tiles.map((tile, index) => `<div class="stat glass" style="animation-delay:${index * 60}ms"><strong data-count="${tile.text ? "" : tile.value}" data-suffix="${esc(tile.suffix || "")}">${tile.text ? esc(tile.text) : tile.empty ? "—" : `${tile.value}${esc(tile.suffix)}`}</strong><span>${esc(tile.label)}</span></div>`).join("");
+  $$("#overviewStats [data-count]").forEach((element) => { if (element.dataset.count !== "") countUp(element, Number(element.dataset.count), element.dataset.suffix); });
+}
+
+function renderChainTimeline(product, journey) {
+  const events = [];
+  if (product?.registration_tx_hash) {
+    events.push({ title: "Batch registered", detail: `Block ${product.registration_block_number} · tx ${short(product.registration_tx_hash)}` });
+  }
+  journey.slice(1).filter((item) => item.status === "APPROVED" && item.commitment_hash).forEach((item) => {
+    events.push({ title: `${STAGE_NAMES[item.stage]} sealed`, detail: `${String(item.approved_at || "").slice(0, 16)} · ${short(item.commitment_hash)}` });
+  });
+  if (product?.final_sale_status === "APPROVED_FOR_SALE") events.push({ title: "Approved for sale", detail: "Verifiable by customers", final: true });
+  $("#chainTimeline").innerHTML = events.length
+    ? events.map((item) => `<li class="${item.final ? "final" : ""}"><strong>${esc(item.title)}</strong><small class="mono">${esc(item.detail)}</small></li>`).join("")
+    : '<li class="muted">Nothing sealed yet. The manufacturer\'s registration is the first entry.</li>';
+}
+
+$("#overviewGo").addEventListener("click", async () => {
+  const role = state.user?.role;
+  const product = currentProduct();
+  const stage = ROLE_STAGE[role] || (product && STAGES.includes(product.current_stage) ? product.current_stage : null);
+  if (stage === "RAW_MATERIAL_SUPPLIER" && state.materials.length) await selectQuality(stage, "RAW_MATERIAL", state.contextType === "RAW_MATERIAL" ? state.contextId : state.materials[0].id);
+  else if (stage && product) await selectQuality(stage, "PRODUCT", product.product_code);
+  else if (role === "MANUFACTURER" && !product) { go("batches"); return; }
+  go("quality");
+});
+
+$("#refreshDashboard").addEventListener("click", (event) => withButton(event.currentTarget, "", async () => {
+  await refreshHealth(); await refreshRecords(); await refreshDashboard();
+}));
+
+/* ---------- Verify ---------- */
 async function verify(code = $("#verifyCode").value.trim(), announce = false) {
   const result = await api(`/api/verify/${encodeURIComponent(code)}`);
   state.verification = result;
+  const card = $("#consumerResult");
   if (result.status === "NOT_FOUND") {
-    $("#consumerResult").innerHTML = `<span class="seal">OC</span><div class="eyebrow">Verification result</div><h3 class="verified-title">Product Not Found</h3><p>${esc(result.message)}</p><div class="empty-state">Check the product code and try again.</div>`;
-    if (announce) showFeedback("Product not found", "No OriginChain record matches that code.", "warning");
+    card.innerHTML = `<div class="verdict bad"><div class="seal-mark bad">?</div><div><h2>Not found</h2><p class="muted">${esc(result.message)}</p></div></div>`;
+    if (announce) showFeedback("Product not found", "Check the code and try again.", "warning");
+    updateControls();
     return result;
   }
   const authentic = result.status === "GENUINE";
-  const sale = result.approved_for_sale;
-  const integrityMismatch = !result.metadata_integrity;
-  $("#consumerResult").innerHTML = `<span class="seal">OC</span><div class="eyebrow">Consumer verification · read only</div>
-    <h3 class="verified-title">${authentic ? "Authentic" : "Suspicious"}</h3>
-    <p>${authentic ? (sale ? "Approved for Sale" : "Quality Review Incomplete") : "Blockchain Hash Mismatch"}</p>
-    ${integrityMismatch ? '<div class="tamper-warning"><strong>Metadata integrity failed</strong><br>Blockchain hash mismatch detected. Local product information has changed since registration.</div>' : ""}
-    <div class="consumer-details"><div><small>Product</small><strong>${esc(result.product.name)}</strong></div><div><small>Brand</small><strong>${esc(result.product.brand)}</strong></div><div><small>Batch</small><strong>${esc(result.product.batch_number)}</strong></div><div><small>Product type</small><strong>${esc(label(result.product.product_type))}</strong></div></div>
-    <div class="consumer-status good"><span>Product Configuration</span><strong>${result.product.product_configuration?.verified_against_recorded_specification ? `Verified against recorded specification v${esc(result.product.product_configuration.specification_version)}` : "Not recorded"}</strong></div>
-    <div class="consumer-status ${authentic ? "good" : "bad"}"><span>Blockchain authenticity</span><strong>${authentic ? "Verified" : "Suspicious"}</strong></div>
-    <div class="consumer-status ${result.metadata_integrity ? "good" : "bad"}"><span>Metadata integrity</span><strong>${result.metadata_integrity ? "Verified" : "Hash Mismatch"}</strong></div>
-    <div class="consumer-status ${sale ? "good" : "bad"}"><span>Final retail status</span><strong>${esc(label(result.final_sale_status))}</strong></div>
-    <h4>Quality Journey</h4><div class="public-journey">${result.quality_journey.map((item) => `<div><span>${esc(item.display_name)}</span><strong class="status ${esc(item.status)}">${esc(label(item.status))}</strong></div>`).join("")}</div>
-    <h4>Provenance</h4><p>${result.ownership_history.map((item) => esc(label(item.role))).join(" → ")}</p>
-    <h4>Public Evidence</h4>${publicEvidenceMarkup(result.public_evidence)}
-    <p><small>Required evidence integrity: ${esc(label(result.document_integrity))}. Internal evidence and inspection notes remain private.</small></p>`;
-  if (announce) showFeedback(
-    authentic ? "Authenticity verified" : "Suspicious product metadata",
-    authentic ? label(result.final_sale_status) : "The local metadata no longer matches the immutable blockchain commitment.",
-    authentic ? "success" : "error",
-  );
+  const p = result.product;
+  card.innerHTML = `<div class="verdict ${authentic ? "ok" : "bad"}"><div class="seal-mark ${authentic ? "ok" : "bad"}">${authentic ? "✓" : "!"}</div>
+      <div><h2>${authentic ? "Authentic" : "Suspicious"}</h2><p class="muted">${authentic ? "Matches the blockchain record." : "Records no longer match the blockchain fingerprint."}</p></div></div>
+    ${authentic ? "" : '<div class="alert">Blockchain hash mismatch: product details were changed after registration.</div>'}
+    <div class="kv">
+      <div><small>Product</small><span>${esc(p.name)}</span></div>
+      <div><small>Brand</small><span>${esc(p.brand)}</span></div>
+      <div><small>Batch</small><span>${esc(p.batch_number)}</span></div>
+      <div><small>Sale status</small><span>${pill(result.final_sale_status)}</span></div>
+    </div>
+    <div><span class="field-label">Quality journey</span><div class="mini-journey">${result.quality_journey.map((item) => `<div class="${item.status === "APPROVED" ? "ok" : ["HOLD", "REJECTED"].includes(item.status) ? "bad" : ""}">${esc(STAGE_NAMES[item.stage] || item.display_name)}<br><b>${esc(label(item.status))}</b></div>`).join("")}</div></div>
+    <div><span class="field-label">Custody chain</span><div class="provenance">${result.ownership_history.map((item) => `<b>${esc(label(item.role))}</b>`).join(" → ")}</div></div>
+    ${authentic ? `<div class="row-actions"><button class="btn btn-gold btn-sm" type="button" id="verifyCertificate">View certificate</button></div>` : ""}
+    <div><span class="field-label">Public documents</span>${result.public_evidence.length ? `<div class="check-meta">${result.public_evidence.map((item) => `<span class="file-chip ${item.integrity === "VERIFIED" ? "ok" : "bad"}" title="${esc(item.check_name)}">${item.integrity === "VERIFIED" ? "✓" : "!"} <span>${esc(item.check_name)}</span></span>`).join("")}</div>` : '<small class="muted">None shared.</small>'}</div>`;
+  $("#verifyCertificate")?.addEventListener("click", () => openCertificate(result.product_code));
+  if (announce) showFeedback(authentic ? "Authentic" : "Suspicious product", authentic ? label(result.final_sale_status) : "The record was changed after it was sealed.", authentic ? "success" : "error");
+  updateControls();
   return result;
 }
 
-$("#verifyForm").addEventListener("submit", (event) => {
-  event.preventDefault();
-  withButton(event.submitter, "Verifying…", async () => {
-    try { await verify(undefined, true); }
-    catch (error) { reportError(error, "Product verification failed"); }
+function runVerify(announce = true) {
+  return withButton($("#verifyForm .btn-primary"), "Checking…", async () => {
+    $("#consumerResult").innerHTML = skeletonVerify();
+    try {
+      const result = await verify(undefined, announce);
+      if (announce && result.status === "GENUINE") celebrate($("#consumerResult .seal-mark"), 90);
+    } catch (error) { reportError(error, "Verification failed"); }
   });
-});
+}
+$("#verifyForm").addEventListener("submit", (event) => { event.preventDefault(); runVerify(true); });
 
-function openDialog(dialog, fallbackMessage, confirmed) {
-  if (typeof dialog.showModal === "function") {
-    dialog.returnValue = "";
-    dialog.showModal();
+/* ---------- Admin ---------- */
+async function refreshAudit() {
+  if (state.user?.role !== "ADMIN") return;
+  const list = $("#auditList");
+  try {
+    const events = await api("/api/audit?limit=75");
+    list.innerHTML = events.length ? events.map((item) => `<div class="audit-row">
+      <time>${esc(String(item.created_at).replace("T", " ").slice(0, 19))}</time>
+      <div><strong>${esc(label(item.action))}</strong><br><small>${esc(item.entity_id || item.entity_type)}</small></div>
+      <div>${esc(item.display_name || item.username || "System")}<br><small>${esc(label(item.actor_role))}</small></div>
+      ${pill(item.result)}</div>`).join("") : '<div class="empty-state">No activity yet.</div>';
+  } catch (error) {
+    list.textContent = "Activity could not be loaded.";
+    reportError(error, "Activity unavailable");
   }
-  else if (window.confirm(fallbackMessage)) confirmed();
+}
+$("#refreshAudit").addEventListener("click", (event) => withButton(event.currentTarget, "", refreshAudit));
+
+$$("[data-admin-tab]").forEach((tab) => tab.addEventListener("click", () => {
+  $$("[data-admin-tab]").forEach((item) => item.setAttribute("aria-selected", String(item === tab)));
+  $$("[data-admin-panel]").forEach((panel) => { panel.hidden = panel.dataset.adminPanel !== tab.dataset.adminTab; });
+}));
+
+/* ---------- Floating demo menu ---------- */
+function applyFabVisibility() {
+  const role = state.user?.role;
+  $("#fab").classList.toggle("hidden", !state.demoMode);
+  $("#fabStage").classList.toggle("hidden", !OPERATIONAL_ROLES.includes(role));
+  $("#demoHoldButton").classList.toggle("hidden", role !== "RETAILER");
+  $("#fabAdmin").classList.toggle("hidden", role !== "ADMIN");
+  $$("[data-quick-role]").forEach((button) => button.classList.toggle("current", state.user?.username === button.dataset.quickRole));
+}
+
+function setFab(open) {
+  $("#fabMenu").hidden = !open;
+  $("#fabButton").setAttribute("aria-expanded", String(open));
+}
+$("#fabButton").addEventListener("click", () => setFab($("#fabMenu").hidden));
+document.addEventListener("click", (event) => {
+  if (!$("#fab").contains(event.target)) setFab(false);
+  if (!event.target.closest(".info")) $$("#qualityChecks .info[open]").forEach((item) => { item.open = false; });
+});
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") setFab(false); });
+$$(".fab-item").forEach((item) => item.addEventListener("click", () => setFab(false)));
+
+$$("[data-quick-role]").forEach((button) => button.addEventListener("click", async () => {
+  const username = button.dataset.quickRole;
+  setFab(false);
+  if (state.user?.username === username) return;
+  try {
+    if (state.user) showLoggedOut();
+    const user = await signIn(username, DEMO_PASSWORD);
+    showFeedback(`Now signed in as ${ROLE_NAMES[user.role]}`, user.display_name, "success");
+    go(user.role === "ADMIN" ? "overview" : "quality");
+  } catch (error) { reportError(error, "Switch failed"); }
+}));
+
+function openConfirm(dialog) {
+  dialog.returnValue = "";
+  dialog.showModal();
 }
 
 function requestDemoAction(action) {
   state.demoAction = action;
   const hold = action === "hold";
-  $("#demoActionTitle").textContent = hold ? "Create the Demo HOLD case?" : "Run Demo Auto-Fill?";
+  $("#demoActionTitle").textContent = hold ? "Create a HOLD case?" : "Auto-fill your checks?";
   $("#demoActionCopy").textContent = hold
-    ? "This records a fictional Security Seal and Luxury Pack failure through the normal Retail quality service. The product will move to HOLD until corrected."
-    : "This creates fictional PASS results and safe evidence through the normal quality and approval services for the signed-in stage actor. Transfers remain manual.";
-  $("#confirmDemoAction").textContent = hold ? "Create Demo HOLD" : "Run Demo Auto-Fill";
-  openDialog(
-    $("#demoActionDialog"),
-    hold ? "Create the fictional Retail HOLD case?" : "Run Demo Auto-Fill for this stage?",
-    () => runDemoAction(action),
-  );
+    ? "Fails the seal check through the normal workflow, so the product goes on HOLD until fixed."
+    : "Fills your five checks with fictional passing results and files, then approves. Transfers stay manual.";
+  $("#confirmDemoAction").textContent = hold ? "Create HOLD" : "Auto-fill";
+  openConfirm($("#demoActionDialog"));
 }
-
 $("#demoAutofillButton").addEventListener("click", () => requestDemoAction("auto-fill"));
 $("#demoHoldButton").addEventListener("click", () => requestDemoAction("hold"));
 $("#demoActionDialog").addEventListener("close", () => {
@@ -814,236 +990,83 @@ $("#demoActionDialog").addEventListener("close", () => {
 async function runDemoAction(action) {
   const hold = action === "hold";
   const button = hold ? $("#demoHoldButton") : $("#demoAutofillButton");
-  await withButton(button, hold ? "Creating Demo HOLD…" : "Completing demo stage…", async () => {
+  await withButton(button, hold ? "Creating HOLD…" : "Filling checks…", async () => {
     try {
-      const result = await api(
-        hold ? "/api/demo/retailer-hold" : "/api/demo/auto-fill",
-        { method: "POST" },
-      );
+      const result = await api(hold ? "/api/demo/retailer-hold" : "/api/demo/auto-fill", { method: "POST" });
       await refreshHealth();
       await Promise.all([refreshRecords(), refreshQualityReferences()]);
       await refreshDashboard();
-      if (result.context_type === "RAW_MATERIAL") {
-        await selectQuality(result.stage, "RAW_MATERIAL", result.context_id);
-      } else {
-        $("#verifyCode").value = result.product_code;
-        await selectQuality(result.stage, "PRODUCT", result.product_code);
-      }
-      showFeedback(
-        hold ? "Demo HOLD created" : result.corrected_hold ? "Demo issue corrected" : "Demo stage complete",
-        `${result.message} ${result.next_action || ""}`.trim(),
-        hold ? "warning" : "success",
-        result.steps || [],
-      );
-      $("#operations").scrollIntoView({ behavior: "smooth" });
-    } catch (error) {
-      reportError(error, hold ? "Demo HOLD could not be created" : "Demo Auto-Fill could not complete");
-    }
+      if (result.context_type === "RAW_MATERIAL") await selectQuality(result.stage, "RAW_MATERIAL", result.context_id);
+      else { $("#verifyCode").value = result.product_code; await selectQuality(result.stage, "PRODUCT", result.product_code); }
+      showFeedback(hold ? "HOLD created" : result.corrected_hold ? "HOLD fixed" : "Stage complete", result.next_action || result.message, hold ? "warning" : "success");
+      go("quality");
+    } catch (error) { reportError(error, hold ? "HOLD failed" : "Auto-fill failed"); }
   });
 }
 
-$("#tamperButton").addEventListener("click", () => openDialog(
-  $("#tamperDialog"), "Intentionally tamper local metadata for this demonstration?", runTamper,
-));
-$("#tamperDialog").addEventListener("close", () => {
-  if ($("#tamperDialog").returnValue === "confirm") runTamper();
-});
+$("#tamperButton").addEventListener("click", () => openConfirm($("#tamperDialog")));
+$("#tamperDialog").addEventListener("close", () => { if ($("#tamperDialog").returnValue === "confirm") runTamper(); });
 async function runTamper() {
-  const button = $("#tamperButton");
-  await withButton(button, "Tampering local metadata…", async () => {
+  await withButton($("#tamperButton"), "Tampering…", async () => {
     try {
-      await api(`/api/demo/tamper/${encodeURIComponent($("#verifyCode").value.trim())}`, { method: "POST" });
-      await refreshRecords(); await verify(undefined, false);
+      await api(`/api/demo/tamper/${encodeURIComponent(currentProduct()?.product_code || $("#verifyCode").value.trim())}`, { method: "POST" });
+      await refreshRecords();
+      go("verify");
+      await verify(undefined, false);
       await refreshAudit();
-      showFeedback("Demo tamper completed", "Metadata integrity now shows a blockchain hash mismatch and Suspicious status.", "warning");
-    } catch (error) { reportError(error, "Tamper demonstration failed"); }
+      showFeedback("Data tampered", "Verification now shows Suspicious.", "warning");
+    } catch (error) { reportError(error, "Tamper failed"); }
   });
 }
 
-function renderJourney(journey, currentStage) {
-  const approvedCount = journey.filter((item) => item.status === "APPROVED").length;
-  const currentIndex = currentStage === "COMPLETE" ? -1 : STAGES.indexOf(currentStage);
-  $("#journey").innerHTML = journey.map((item, index) => {
-    const isCurrent = currentIndex === index;
-    const future = currentIndex >= 0 && index > currentIndex && item.status === "PENDING";
-    const shownStatus = future ? "NOT_STARTED" : item.status;
-    const marker = isCurrent ? "Current stage" : item.status === "APPROVED" ? "Completed" : future ? "Upcoming" : "";
-    return `<article class="${item.status.toLowerCase()} ${isCurrent ? "current" : ""} ${future ? "future" : ""}"><span class="stage-marker">${esc(marker)}</span><i>0${index + 1}</i><h3>${esc(item.display_name)}</h3><b>${esc(label(shownStatus))}</b><p>${item.required_total ? `${item.required_passed} of ${item.required_total} requirements passed` : index === 0 ? "Register and approve supplier batches" : "Waiting for the preceding stage"}</p></article>`;
-  }).join("");
-  return approvedCount;
-}
-
-async function operationalJourney(product) {
-  const linked = product?.linked_raw_materials || [];
-  const rawApproved = linked.length
-    ? linked.every((item) => item.quality_status === "APPROVED" && !isExpired(item.expiry_retest_date))
-    : state.materials.length > 0 && state.materials.every((item) => item.quality_status === "APPROVED" && !isExpired(item.expiry_retest_date));
-  const journey = [{
-    stage: "RAW_MATERIAL_SUPPLIER", display_name: "Raw Materials",
-    status: rawApproved ? "APPROVED" : "PENDING",
-    required_passed: (linked.length ? linked : state.materials).filter((item) => item.quality_status === "APPROVED").length,
-    required_total: (linked.length ? linked : state.materials).length,
-  }];
-  if (!product) {
-    return [...journey, ...STAGES.slice(1).map((stage) => ({ stage, display_name: STAGE_NAMES[stage], status: "PENDING", required_passed: 0, required_total: 0, blocking_reasons: [] }))];
-  }
-  const summaries = await Promise.all(STAGES.slice(1).map((stage) =>
-    api(`/api/quality/PRODUCT/${encodeURIComponent(product.product_code)}/summary?stage=${stage}`)));
-  return [...journey, ...summaries];
-}
-
-function fallbackCurrentStage(product, journey) {
-  if (product?.final_sale_status === "APPROVED_FOR_SALE") return "COMPLETE";
-  if (product) return product.current_stage;
-  return journey[0].status === "APPROVED" ? "MANUFACTURER" : "RAW_MATERIAL_SUPPLIER";
-}
-
-async function refreshDashboard() {
-  const product = currentProduct();
+$("#readinessButton").addEventListener("click", (event) => withButton(event.currentTarget, "Checking…", async () => {
+  const panel = $("#readinessResult");
   try {
-    const journey = await operationalJourney(product);
-    const currentStage = fallbackCurrentStage(product, journey);
-    const approvedCount = renderJourney(journey, currentStage);
-    const currentSummary = journey.find((item) => item.stage === currentStage);
-    const blockers = currentSummary?.blocking_reasons || [];
-    $("#overviewBatch").textContent = product ? product.batch_number : "Not registered";
-    $("#overviewProduct").textContent = product ? product.name : "Aurelia Prestige Renewal Serum";
-    $("#overviewStage").textContent = currentStage === "COMPLETE" ? "Workflow Complete" : STAGE_NAMES[currentStage];
-    $("#overviewQuality").textContent = `${approvedCount} of 4 stages approved`;
-    $("#overviewIssues").textContent = blockers.length ? `${blockers.length} blocking issue${blockers.length === 1 ? "" : "s"}` : approvedCount === 4 ? "Every stage approved" : "Continue the current stage";
-    const sale = product?.final_sale_status || "NOT_READY";
-    $("#overviewSale").textContent = label(sale);
-    $("#overviewSale").className = `display-status ${sale === "APPROVED_FOR_SALE" ? "approved" : sale.toLowerCase()}`;
-    $("#overviewNext").textContent = currentStage === "COMPLETE" ? "Ready for consumer verification"
-      : currentStage === "MANUFACTURER" && journey[1].status === "APPROVED" ? "Ready for Distributor transfer"
-      : currentStage === "DISTRIBUTOR" && journey[2].status === "APPROVED" ? "Ready for Retailer transfer"
-      : currentStage === "RETAILER" ? "Complete final sale-readiness QC"
-      : currentStage === "MANUFACTURER" ? "Register or release the finished batch"
-      : currentStage === "DISTRIBUTOR" ? "Complete receiving and logistics QC"
-      : "Register and approve supplier batches";
-    await refreshDemoProgress();
-  } catch (error) { reportError(error, "Dashboard state could not be refreshed"); }
-}
-
-async function refreshDemoProgress() {
-  const panel = $("#demoProgress");
-  if (!state.demoMode || !state.user) {
-    panel.classList.add("hidden");
-    return;
-  }
-  try {
-    const progress = await api("/api/demo/progress");
-    panel.classList.remove("hidden");
-    panel.innerHTML = `<strong>Demo Progress</strong><div>${progress.stages.map((item) => {
-      const symbol = item.complete ? "✓" : item.marker === "CURRENT" ? "→" : "○";
-      return `<span class="${item.complete ? "complete" : item.marker.toLowerCase()}"><b>${symbol}</b> ${esc(item.name)}</span>`;
-    }).join("")}</div>`;
-  } catch (error) {
-    panel.classList.add("hidden");
-    if (error.status !== 404) reportError(error, "Demo progress unavailable");
-  }
-}
-
-$("#refreshDashboard").addEventListener("click", (event) => withButton(event.currentTarget, "Refreshing…", async () => {
-  try { await refreshHealth(); await refreshRecords(); await refreshDashboard(); }
-  catch (error) { reportError(error, "Dashboard refresh failed"); }
+    const result = await api("/api/demo/readiness");
+    const failed = result.checks.filter((item) => !item.ok);
+    panel.className = "readiness";
+    panel.innerHTML = `${pill(result.ready ? "READY" : "FAILED", result.ready ? "Demo ready" : "Not ready")}<span class="muted">${result.checks.length - failed.length}/${result.checks.length} checks passed</span>`;
+    showFeedback(result.ready ? "Demo is ready" : "Demo is not ready", result.ready ? "Every prerequisite passed." : "", result.ready ? "success" : "error", failed.map((item) => `${item.name}: ${item.detail}`));
+    go("admin");
+  } catch (error) { reportError(error, "Readiness check failed"); }
 }));
 
-async function refreshAudit() {
-  if (state.user?.role !== "ADMIN") return;
-  const list = $("#auditList");
-  list.className = "audit-list empty-state";
-  list.textContent = "Loading recent attributed activity…";
+$("#loadPresentationButton").addEventListener("click", (event) => withButton(event.currentTarget, "Building demo…", async () => {
   try {
-    const events = await api("/api/audit?limit=75");
-    if (!events.length) {
-      list.textContent = "No audit events yet. Actor actions will appear here.";
-      return;
-    }
-    list.className = "audit-list";
-    list.innerHTML = events.map((item) => `<article>
-      <time>${esc(item.created_at)}</time>
-      <div><strong>${esc(label(item.action))}</strong><small>${esc(item.entity_type)}${item.entity_id ? ` · ${esc(item.entity_id)}` : ""}</small></div>
-      <div><span>${esc(item.display_name || item.username || "System")}</span><small>${esc(label(item.actor_role))} · ${esc(item.organization_name || "")}</small></div>
-      <span class="status ${esc(item.result)}">${esc(label(item.result))}</span>
-    </article>`).join("");
-  } catch (error) {
-    list.textContent = "Audit activity could not be loaded.";
-    reportError(error, "Audit activity unavailable");
-  }
-}
+    const result = await api("/api/demo/presentation-seed", { method: "POST" });
+    await refreshHealth();
+    await Promise.all([refreshRecords(), refreshQualityReferences()]);
+    await refreshDashboard();
+    await selectQuality("RETAILER", "PRODUCT", result.product_code);
+    await verify(result.product_code, false);
+    showFeedback("Full demo loaded", "All four stages approved and on sale.", "success");
+    go("overview");
+  } catch (error) { reportError(error, "Demo couldn't load"); }
+}));
 
-$("#refreshAudit").addEventListener("click", (event) => withButton(
-  event.currentTarget, "Refreshing…", refreshAudit,
-));
-
-$("#readinessButton").addEventListener("click", (event) => withButton(
-  event.currentTarget, "Checking demo stack…", async () => {
-    const panel = $("#readinessResult");
-    try {
-      const result = await api("/api/demo/readiness");
-      panel.className = `readiness-result ${result.ready ? "ready" : "not-ready"}`;
-      panel.innerHTML = `<strong>${esc(result.status.replace("_", " "))}</strong><ul>${result.checks.map((item) => `<li class="${item.ok ? "pass" : "fail"}"><b>${item.ok ? "✓" : "×"}</b> ${esc(item.name)}<small>${esc(item.detail)}</small></li>`).join("")}</ul>${result.blocking_issues.length ? `<p>${result.blocking_issues.map(esc).join(" ")}</p>` : ""}`;
-      showFeedback(
-        result.ready ? "Demo is ready" : "Demo is not ready",
-        result.ready ? "Every presentation prerequisite passed." : "Review the failed readiness items before presenting.",
-        result.ready ? "success" : "error",
-      );
-      await refreshAudit();
-    } catch (error) { reportError(error, "Demo readiness check failed"); }
-  },
-));
-
-$("#loadPresentationButton").addEventListener("click", (event) => withButton(
-  event.currentTarget, "Creating the complete demo…", async () => {
-    try {
-      const result = await api("/api/demo/presentation-seed", { method: "POST" });
-      await refreshHealth();
-      await Promise.all([refreshRecords(), refreshQualityReferences()]);
-      await refreshDashboard();
-      await refreshAudit();
-      await selectQuality("RETAILER", "PRODUCT", result.product_code);
-      await verify(result.product_code, false);
-      showFeedback(
-        "Complete presentation demo loaded",
-        "All four stages are approved and the product is ready for public verification.",
-        "success",
-      );
-      $("#dashboard").scrollIntoView({ behavior: "smooth" });
-    } catch (error) { reportError(error, "Presentation demo could not be loaded"); }
-  },
-));
-
-$("#resetButton").addEventListener("click", () => openDialog(
-  $("#resetDialog"), "Prepare fresh local data? The running blockchain is not reset.", runReset,
-));
-$("#resetDialog").addEventListener("close", () => {
-  if ($("#resetDialog").returnValue === "confirm") runReset();
-});
+$("#resetButton").addEventListener("click", () => openConfirm($("#resetDialog")));
+$("#resetDialog").addEventListener("close", () => { if ($("#resetDialog").returnValue === "confirm") runReset(); });
 async function runReset() {
-  await withButton($("#resetButton"), "Resetting local data…", async () => {
+  await withButton($("#resetButton"), "Clearing…", async () => {
     try {
       const result = await api("/api/demo/reset", { method: "POST" });
-      state.materials = []; state.products = []; state.verification = null;
-      state.activeStage = null; state.contextType = null; state.contextId = null; state.activeSummary = null;
-      renderMaterials(); renderMaterialChoices(); renderProductState(); updateControls();
-      $("#qualityContext").textContent = "Select a registered material or product stage.";
-      $("#qualitySummary").className = "quality-summary empty-state";
-      $("#qualitySummary").textContent = "Register or select a batch before performing quality checks.";
-      $("#blockingPanel").classList.add("hidden");
-      $("#qualityChecks").className = "quality-checks empty-state";
-      $("#qualityChecks").textContent = "Quality categories and checks will appear here.";
-      $("#consumerResult").innerHTML = '<span class="seal">OC</span><p>Enter the product code to view the consumer-safe record.</p>';
-      await refreshDashboard();
-      await refreshAudit();
-      showFeedback("Fresh local demo prepared", result.message, "warning", result.fresh_chain_steps || []);
-    } catch (error) { reportError(error, "Local reset failed"); }
+      Object.assign(state, { materials: [], products: [], verification: null, activeStage: null, contextType: null, contextId: null, activeSummary: null });
+      renderMaterials(); renderMaterialChoices(); renderProductState(); renderEmptyBoard();
+      $("#consumerResult").innerHTML = '<div class="seal-mark" aria-hidden="true">OC</div><p class="muted">Results appear here.</p>';
+      await refreshDashboard(); await refreshAudit();
+      showFeedback("Fresh demo ready", "Batches and files cleared. For a fully clean chain, restart Hardhat and redeploy.", "warning");
+      go("overview");
+    } catch (error) { reportError(error, "Reset failed"); }
   });
 }
 
-$("#noticeClose").addEventListener("click", () => {
-  clearTimeout(showFeedback.timer);
-  $("#notice").classList.add("hidden");
+/* ---------- Notice, theme, about ---------- */
+$("#noticeClose").addEventListener("click", () => { clearTimeout(showFeedback.timer); $("#notice").classList.add("hidden"); });
+
+$("#themeToggle").addEventListener("click", () => {
+  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("originchain_theme", next); } catch (_) { /* private mode */ }
 });
 
 function selectAboutTab(tab) {
@@ -1053,25 +1076,20 @@ function selectAboutTab(tab) {
     item.tabIndex = active ? 0 : -1;
     $(`#${item.getAttribute("aria-controls")}`).hidden = !active;
   });
-  $(".about-body").scrollTop = 0;
 }
-
 function renderAboutStats() {
   const health = state.health;
   $("#aboutChain").textContent = health?.blockchain_connected ? "Online" : "Offline";
   $("#aboutChain").className = health?.blockchain_connected ? "online" : "offline";
   $("#aboutBlock").textContent = health?.blockchain_connected ? `#${health.current_block}` : "—";
 }
-
 $("#aboutButton").addEventListener("click", () => {
   renderAboutStats();
   $("#aboutDialog").showModal();
   refreshHealth().then(renderAboutStats);
 });
 $("#aboutClose").addEventListener("click", () => $("#aboutDialog").close());
-$("#aboutDialog").addEventListener("click", (event) => {
-  if (event.target === event.currentTarget) event.currentTarget.close();
-});
+$$("dialog").forEach((dialog) => dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.close(); }));
 $$(".about-tabs [role=tab]").forEach((tab, index, tabs) => {
   tab.addEventListener("click", () => selectAboutTab(tab));
   tab.addEventListener("keydown", (event) => {
@@ -1082,11 +1100,323 @@ $$(".about-tabs [role=tab]").forEach((tab, index, tabs) => {
   });
 });
 
+/* ---------- Visual helpers ---------- */
+function bottleSVG(id) {
+  return `<svg class="bottle" viewBox="0 0 120 260" role="img" aria-label="Aurelia Prestige Renewal Serum">
+    <defs>
+      <linearGradient id="${id}-gold" x1="0" x2="1"><stop offset="0" stop-color="#8f6d3a"/><stop offset=".42" stop-color="#ead39f"/><stop offset=".58" stop-color="#d4b783"/><stop offset="1" stop-color="#8a6833"/></linearGradient>
+      <linearGradient id="${id}-liquid" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f0d6a3"/><stop offset="1" stop-color="#b9813f"/></linearGradient>
+      <linearGradient id="${id}-glass" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity=".5"/><stop offset=".5" stop-color="#fff" stop-opacity=".08"/><stop offset="1" stop-color="#fff" stop-opacity=".3"/></linearGradient>
+      <clipPath id="${id}-body"><rect x="22" y="96" width="76" height="150" rx="16"/></clipPath>
+    </defs>
+    <ellipse cx="60" cy="252" rx="42" ry="4.5" fill="#000" opacity=".1" class="bottle-shadow"/>
+    <rect x="46" y="4" width="28" height="46" rx="14" fill="#3a0e1a"/>
+    <rect x="50" y="10" width="5" height="30" rx="2.5" fill="#fff" opacity=".12"/>
+    <rect x="40" y="46" width="40" height="12" rx="3" fill="url(#${id}-gold)"/>
+    <rect x="44" y="58" width="32" height="30" rx="3" fill="url(#${id}-gold)"/>
+    <rect x="40" y="85" width="40" height="11" rx="3" fill="url(#${id}-gold)"/>
+    <rect x="22" y="96" width="76" height="150" rx="16" fill="#fff" fill-opacity=".16" stroke="url(#${id}-gold)" stroke-width="1.2"/>
+    <g clip-path="url(#${id}-body)">
+      <rect class="liquid" x="22" y="118" width="76" height="132" fill="url(#${id}-liquid)" opacity=".88"/>
+      <rect class="glint" x="-30" y="96" width="18" height="150" fill="#fff" opacity=".35" transform="skewX(-12)"/>
+    </g>
+    <rect x="30" y="146" width="60" height="66" rx="3" fill="#fbf7ef"/>
+    <line x1="36" x2="84" y1="155" y2="155" stroke="url(#${id}-gold)" stroke-width=".8"/>
+    <text x="60" y="176" text-anchor="middle" font-family="Cormorant Garamond, Georgia, serif" font-size="12" letter-spacing="1.8" fill="#1a1614">AURELIA</text>
+    <text x="60" y="189" text-anchor="middle" font-family="Inter, sans-serif" font-size="5.2" letter-spacing="1.6" fill="#8f6d3a">PRESTIGE RENEWAL</text>
+    <text x="60" y="198" text-anchor="middle" font-family="Inter, sans-serif" font-size="4.6" letter-spacing="1" fill="#74695e">SERUM · 30 ML</text>
+    <line x1="36" x2="84" y1="204" y2="204" stroke="url(#${id}-gold)" stroke-width=".8"/>
+    <rect x="29" y="104" width="6" height="134" rx="3" fill="url(#${id}-glass)"/>
+  </svg>`;
+}
+function renderBottles() {
+  $$("[data-bottle]").forEach((slot, index) => { slot.innerHTML = bottleSVG(`bottle${index}`); });
+}
+
+function skeletonBoard() {
+  return LANES.map((lane, index) => `<section class="lane"><div class="lane-head"><span class="kind ${lane.cls}">${esc(lane.label)}</span></div>${Array.from({ length: index === 2 ? 1 : 2 }, () => '<div class="check-card skeleton"><i></i><i></i><i class="short"></i></div>').join("")}</section>`).join("");
+}
+function skeletonVerify() {
+  return '<div class="verdict"><div class="seal-mark skeleton-dot"></div><div class="skeleton-lines"><i></i><i class="short"></i></div></div><div class="skeleton-block"></div><div class="skeleton-block short"></div>';
+}
+
+function countUp(element, to, suffix = "") {
+  if (!element || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const start = performance.now();
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / 900);
+    element.textContent = `${Math.round(to * (1 - Math.pow(1 - t, 3)))}${suffix}`;
+    if (t < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+function expiryBadge(dateValue) {
+  if (!dateValue) return "";
+  const days = Math.ceil((new Date(`${dateValue}T00:00:00`) - new Date()) / 864e5);
+  const tone = days < 0 ? "bad" : days < 90 ? "" : "ok";
+  return `<span class="pill ${tone} pill-xs">${days < 0 ? "Expired" : `${days.toLocaleString()} days left`}</span>`;
+}
+
+/* Gold-dust celebration */
+function celebrate(origin, count = 80) {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const canvas = $("#celebration");
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = innerWidth * dpr; canvas.height = innerHeight * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const rect = origin?.getBoundingClientRect?.() || { left: innerWidth / 2, top: innerHeight / 2, width: 0, height: 0 };
+  const ox = rect.left + rect.width / 2, oy = rect.top + rect.height / 2;
+  const golds = ["#b08d57", "#d4b783", "#ead39f", "#8f6d3a", "#fff3d6"];
+  const parts = Array.from({ length: count }, () => {
+    const angle = Math.random() * Math.PI * 2, speed = 3 + Math.random() * 7;
+    return { x: ox, y: oy, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - 4, size: 2 + Math.random() * 4,
+      rot: Math.random() * Math.PI, vr: (Math.random() - .5) * .3, life: 1, color: golds[Math.floor(Math.random() * golds.length)], diamond: Math.random() > .5 };
+  });
+  canvas.classList.add("on");
+  const tick = () => {
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    let alive = 0;
+    parts.forEach((p) => {
+      if (p.life <= 0) return;
+      alive += 1;
+      p.vy += .22; p.vx *= .985; p.x += p.vx; p.y += p.vy; p.rot += p.vr; p.life -= .012;
+      ctx.save(); ctx.globalAlpha = Math.max(0, p.life); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.fillStyle = p.color;
+      if (p.diamond) { ctx.beginPath(); ctx.moveTo(0, -p.size); ctx.lineTo(p.size * .6, 0); ctx.lineTo(0, p.size); ctx.lineTo(-p.size * .6, 0); ctx.fill(); }
+      else { ctx.beginPath(); ctx.arc(0, 0, p.size / 2, 0, Math.PI * 2); ctx.fill(); }
+      ctx.restore();
+    });
+    if (alive) requestAnimationFrame(tick); else { ctx.clearRect(0, 0, innerWidth, innerHeight); canvas.classList.remove("on"); }
+  };
+  requestAnimationFrame(tick);
+}
+
+/* ---------- Certificate of authenticity ---------- */
+async function openCertificate(code) {
+  try {
+    const result = await api(`/api/verify/${encodeURIComponent(code)}`);
+    if (result.status !== "GENUINE") {
+      showFeedback("No certificate", result.status === "SUSPICIOUS" ? "This product failed verification." : "Product not found.", "warning");
+      return;
+    }
+    const p = result.product, chain = result.blockchain;
+    const issued = new Date().toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" });
+    $("#certificate").innerHTML = `
+      <div class="cert-border">
+        <header class="cert-head">
+          <img src="/static/logo-mark.svg" alt="" width="44" height="44">
+          <span class="eyebrow">OriginChain</span>
+          <h1>Certificate of Authenticity</h1>
+          <p class="muted">This product's record matches its fingerprint on the blockchain.</p>
+        </header>
+        <div class="cert-main">
+          <div class="cert-bottle">${bottleSVG("cert")}</div>
+          <dl class="cert-facts">
+            <div><dt>Product</dt><dd>${esc(p.name)}</dd></div>
+            <div><dt>House</dt><dd>${esc(p.brand)}</dd></div>
+            <div><dt>Batch</dt><dd>${esc(p.batch_number)}</dd></div>
+            <div><dt>Product code</dt><dd class="mono">${esc(p.product_code)}</dd></div>
+            <div><dt>Made</dt><dd>${esc(p.manufactured_date || "—")}</dd></div>
+            <div><dt>Best before</dt><dd>${esc(p.expiry_date || "—")}</dd></div>
+            <div><dt>Sale status</dt><dd>${esc(label(result.final_sale_status))}</dd></div>
+            <div><dt>Custody</dt><dd>${result.ownership_history.map((item) => esc(label(item.role))).join(" → ")}</dd></div>
+          </dl>
+          <div class="cert-qr"><img src="/api/qr/${encodeURIComponent(p.product_code)}" alt="QR code" width="120" height="120"><small>Scan to verify</small></div>
+        </div>
+        <ol class="cert-stages">${result.quality_journey.map((item) => `<li class="${item.status === "APPROVED" ? "ok" : ""}"><b>${item.status === "APPROVED" ? "✓" : "·"}</b><strong>${esc(STAGE_NAMES[item.stage] || item.display_name)}</strong><small>${item.approved_at ? esc(String(item.approved_at).slice(0, 10)) : esc(label(item.status))}</small></li>`).join("")}</ol>
+        <div class="cert-hashes mono">
+          <span><b>Product key</b> ${esc(chain.product_key)}</span>
+          <span><b>Fingerprint</b> ${esc(chain.metadata_hash)}</span>
+          <span><b>Registered</b> block ${esc(chain.registration_block_number)} · tx ${esc(chain.registration_tx_hash)}</span>
+        </div>
+        <footer class="cert-foot">
+          <div><span class="cert-sign">OriginChain Registry</span><small>Issued ${esc(issued)}</small></div>
+          <div class="wax-seal" aria-hidden="true"><span>OC</span></div>
+          <div class="right"><small>Educational demonstration · fictional product · not a regulatory certificate</small></div>
+        </footer>
+      </div>`;
+    $("#certDialog").showModal();
+  } catch (error) { reportError(error, "Certificate unavailable"); }
+}
+$("#certPrint").addEventListener("click", () => window.print());
+
+/* ---------- QR scanner ---------- */
+let scanStream = null, scanLoop = null;
+async function decodeQR(source) {
+  if ("BarcodeDetector" in window) {
+    const detector = new BarcodeDetector({ formats: ["qr_code"] });
+    const codes = await detector.detect(source);
+    return codes[0]?.rawValue || null;
+  }
+  if (!window.jsQR) {
+    await new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";
+      script.onload = resolve; script.onerror = () => reject(new Error("QR library could not load (offline?)"));
+      document.head.append(script);
+    });
+  }
+  const width = source.videoWidth || source.naturalWidth || source.width;
+  const height = source.videoHeight || source.naturalHeight || source.height;
+  if (!width || !height) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = width; canvas.height = height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(source, 0, 0, width, height);
+  return window.jsQR(ctx.getImageData(0, 0, width, height).data, width, height)?.data || null;
+}
+function codeFromQR(value) {
+  const match = String(value).match(/#verify\/([^?#]+)/);
+  return match ? decodeURIComponent(match[1]) : String(value).trim();
+}
+function stopScan() {
+  cancelAnimationFrame(scanLoop); scanLoop = null;
+  scanStream?.getTracks().forEach((track) => track.stop()); scanStream = null;
+}
+function scanned(value) {
+  stopScan();
+  $("#scanDialog").close();
+  $("#verifyCode").value = codeFromQR(value);
+  runVerify(true);
+}
+$("#scanButton").addEventListener("click", async () => {
+  $("#scanStatus").textContent = "Starting the camera…";
+  $("#scanDialog").showModal();
+  try {
+    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    const video = $("#scanVideo");
+    video.srcObject = scanStream; await video.play();
+    $("#scanStatus").textContent = "Point the camera at the QR code on the box.";
+    const loop = async () => {
+      if (!scanStream) return;
+      try { const value = await decodeQR(video); if (value) return scanned(value); } catch (_) { /* keep scanning */ }
+      scanLoop = requestAnimationFrame(loop);
+    };
+    loop();
+  } catch (_) {
+    $("#scanStatus").textContent = "Camera unavailable. Upload a photo of the QR code instead.";
+  }
+});
+$("#scanDialog").addEventListener("close", stopScan);
+$("#scanFile").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  const image = new Image();
+  image.src = URL.createObjectURL(file);
+  await image.decode();
+  try {
+    const value = await decodeQR(image);
+    if (value) scanned(value); else $("#scanStatus").textContent = "No QR code found in that photo. Try a closer shot.";
+  } catch (error) { $("#scanStatus").textContent = error.message; }
+  event.target.value = "";
+});
+
+/* ---------- Command palette (⌘K) ---------- */
+let paletteIndex = 0, paletteItems = [];
+function paletteCommands() {
+  const role = state.user?.role;
+  const commands = [];
+  const add = (group, title, hint, run, when = true) => { if (when) commands.push({ group, title, hint, run }); };
+  const views = [["overview", "Overview"], ["batches", "Batches"], ["quality", "Quality checks"], ["verify", "Verify a product"], ["admin", "Admin"]];
+  views.forEach(([view, title]) => add("Go to", title, `#${view}`, () => go(view), allowedView(view) === view));
+  if (state.user) STAGES.filter(canViewStage).forEach((stage) => add("Stage", `${STAGE_NAMES[stage]} checks`, "Quality", () => { $(`.stage-tabs button[data-stage="${stage}"]`)?.click(); go("quality"); }));
+  const product = currentProduct();
+  add("Product", "Show certificate of authenticity", product?.product_code || "", () => openCertificate(product.product_code), Boolean(product));
+  add("Product", "Scan a QR code", "Verify", () => { go("verify"); setTimeout(() => $("#scanButton").click(), 200); });
+  if (state.demoMode) {
+    add("Demo", "Auto-fill my checks", ROLE_NAMES[role] || "", () => $("#demoAutofillButton").click(), OPERATIONAL_ROLES.includes(role));
+    add("Demo", "Create HOLD case", "Retailer", () => $("#demoHoldButton").click(), role === "RETAILER");
+    add("Demo", "Load full demo", "Admin", () => $("#loadPresentationButton").click(), role === "ADMIN");
+    add("Demo", "Readiness check", "Admin", () => $("#readinessButton").click(), role === "ADMIN");
+    add("Demo", "Tamper product data", "Admin", () => $("#tamperButton").click(), role === "ADMIN");
+    add("Demo", "Prepare fresh demo", "Admin", () => $("#resetButton").click(), role === "ADMIN");
+    ["supplier", "manufacturer", "distributor", "retailer", "admin"].forEach((username) =>
+      add("Switch role", `Sign in as ${username.charAt(0).toUpperCase()}${username.slice(1)}`, "Demo account", () => $(`[data-quick-role="${username}"]`).click(), state.user?.username !== username));
+  }
+  add("App", `Switch to ${document.documentElement.dataset.theme === "dark" ? "light" : "dark"} theme`, "Theme", () => $("#themeToggle").click());
+  add("App", "About OriginChain", "Help", () => $("#aboutButton").click());
+  add("App", "Sign out", "", () => $("#logoutButton").click(), Boolean(state.user));
+  return commands;
+}
+function renderPalette() {
+  const query = $("#paletteInput").value.trim().toLowerCase();
+  paletteItems = paletteCommands().filter((item) => !query || `${item.group} ${item.title} ${item.hint}`.toLowerCase().includes(query));
+  paletteIndex = Math.min(paletteIndex, Math.max(0, paletteItems.length - 1));
+  let lastGroup = "";
+  $("#paletteList").innerHTML = paletteItems.map((item, index) => {
+    const header = item.group !== lastGroup ? `<li class="palette-group" role="presentation">${esc(item.group)}</li>` : "";
+    lastGroup = item.group;
+    return `${header}<li role="option" data-index="${index}" aria-selected="${index === paletteIndex}"><span>${esc(item.title)}</span><small>${esc(item.hint)}</small></li>`;
+  }).join("") || '<li class="palette-empty">No matches</li>';
+  $("#paletteList [aria-selected=true]")?.scrollIntoView({ block: "nearest" });
+}
+function openPalette() {
+  if ($("#palette").open) return;
+  $("#paletteInput").value = ""; paletteIndex = 0;
+  renderPalette();
+  $("#palette").showModal();
+  $("#paletteInput").focus();
+}
+function runPaletteItem(index) {
+  const item = paletteItems[index];
+  if (!item) return;
+  $("#palette").close();
+  item.run();
+}
+$("#paletteButton").addEventListener("click", openPalette);
+$("#paletteInput").addEventListener("input", () => { paletteIndex = 0; renderPalette(); });
+$("#paletteInput").addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") { paletteIndex = Math.min(paletteItems.length - 1, paletteIndex + 1); renderPalette(); event.preventDefault(); }
+  if (event.key === "ArrowUp") { paletteIndex = Math.max(0, paletteIndex - 1); renderPalette(); event.preventDefault(); }
+  if (event.key === "Enter") { runPaletteItem(paletteIndex); event.preventDefault(); }
+});
+$("#paletteList").addEventListener("click", (event) => {
+  const option = event.target.closest("[data-index]");
+  if (option) runPaletteItem(Number(option.dataset.index));
+});
+document.addEventListener("keydown", (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); openPalette(); }
+});
+
+/* ---------- Live sync across windows ---------- */
+// One request per tick: /api/live returns a data-change version plus chain status.
+// Full records are fetched only when that version moves.
+let liveVersion = null;
+function recordSignature() {
+  return JSON.stringify([
+    state.products.map((item) => [item.product_code, item.current_stage, item.final_sale_status]),
+    state.materials.map((item) => [item.id, item.quality_status]),
+  ]);
+}
+async function liveTick() {
+  if (document.visibilityState !== "visible") return;
+  if (!state.user) { liveVersion = null; await refreshHealth(true); return; }
+  if (document.querySelector("dialog[open]") || document.querySelector("[aria-busy=true]")) return;
+  try {
+    const live = await api("/api/live");
+    applyHealth(live);
+    if (liveVersion !== null && live.version !== liveVersion) {
+      const before = recordSignature();
+      await refreshRecords(); await refreshDashboard();
+      if (state.activeStage) await renderQuality();
+      if (recordSignature() !== before) {
+        showFeedback("Live update", "Another user just changed this batch.", "success");
+        if (currentProduct()?.final_sale_status === "APPROVED_FOR_SALE" && !before.includes("APPROVED_FOR_SALE")) celebrate(null, 120);
+      }
+    }
+    liveVersion = live.version;
+  } catch (_) { /* offline or signed out: the next tick retries */ }
+}
+setInterval(liveTick, 5000);
+
+/* ---------- Boot ---------- */
 (async function boot() {
-  $("#journey").innerHTML = '<div class="empty-state">Loading current supply-chain state…</div>';
+  renderBottles();
   try {
     const catalog = await api("/api/demo/catalog");
     state.demoMode = Boolean(catalog.demo_mode);
+    applyFabVisibility();
     await refreshHealth();
     if (state.token) {
       const user = await api("/api/auth/me");
@@ -1096,4 +1426,5 @@ $$(".about-tabs [role=tab]").forEach((tab, index, tabs) => {
     showLoggedOut();
     reportError(error, "Saved session could not be restored");
   }
+  route();
 })();

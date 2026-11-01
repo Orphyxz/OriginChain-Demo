@@ -185,9 +185,9 @@ class QualityService:
 
         blockers.extend(self._dependency_blockers(context_type, context_id, stage))
         approval = self.repository.get_stage_approval(context_type.value, context_id, stage.value)
-        calculated = ApprovalStatus.HOLD if failed else (
-            ApprovalStatus.APPROVED if not blockers and rows else ApprovalStatus.PENDING
-        )
+        # A stage is APPROVED only once someone actually approves it (an approval row exists).
+        # All checks passing without that makes it eligible, not approved.
+        calculated = ApprovalStatus.HOLD if failed else ApprovalStatus.PENDING
         status = approval["status"] if approval and not blockers else calculated.value
         product_specification = None
         if context_type == ContextType.PRODUCT:

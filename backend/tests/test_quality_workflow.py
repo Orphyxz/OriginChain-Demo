@@ -290,7 +290,12 @@ def test_templates_are_stage_specific_and_reusable(workflow):
     client, *_ = workflow
     manufacturer = get_standards(client, "MANUFACTURER").json()
     retailer = get_standards(client, "RETAILER").json()
-    assert {item["category"] for item in manufacturer} >= {"Production Batch", "Packaging and Labelling"}
+    for stage_checks in (manufacturer, retailer):
+        categories = [item["category"] for item in stage_checks]
+        assert len(stage_checks) == 5
+        assert categories.count("Check") == 2
+        assert categories.count("Certificate") == 2
+        assert categories.count("Final review") == 1
     assert {item["code"] for item in manufacturer}.isdisjoint({item["code"] for item in retailer})
     assert all(item["name"] == "OriginChain Demo Quality Standard" for item in retailer)
 
@@ -301,11 +306,11 @@ def test_incomplete_and_failed_qc_block_then_correction_allows_approval(workflow
     incomplete = approve(client, "RAW_MATERIAL", material["id"], "RAW_MATERIAL_SUPPLIER")
     assert incomplete.status_code == 409
     assert incomplete.json()["detail"]["blocking_reasons"]
-    complete_stage(client, "RAW_MATERIAL", material["id"], "RAW_MATERIAL_SUPPLIER", "RM-PHYSICAL")
+    complete_stage(client, "RAW_MATERIAL", material["id"], "RAW_MATERIAL_SUPPLIER", "RM-CONDITION")
     failed = approve(client, "RAW_MATERIAL", material["id"], "RAW_MATERIAL_SUPPLIER")
     assert failed.status_code == 409
     standards = get_standards(client, "RAW_MATERIAL_SUPPLIER").json()
-    physical = next(item for item in standards if item["code"] == "RM-PHYSICAL")
+    physical = next(item for item in standards if item["code"] == "RM-CONDITION")
     client.post("/api/quality/results", json={"context_type": "RAW_MATERIAL", "context_id": material["id"],
                 "standard_id": physical["id"], "result": "PASS", "notes": "Corrected inspection"},
                 headers=stage_headers(client, "RAW_MATERIAL_SUPPLIER"))
@@ -493,3 +498,33 @@ def test_reset_clears_local_records_but_explicitly_not_chain(workflow):
     assert response.status_code == 200
     assert "Blockchain state is unchanged" in response.json()["message"]
     assert client.get("/api/raw-materials", headers=auth_headers(client, "admin")).json() == []
+
+
+def test_passing_every_check_is_eligible_but_not_approved_until_signed_off(workflow):
+    client, repository, *_ = workflow
+    material = create_material(client)
+    complete_stage(client, "RAW_MATERIAL", material["id"], "RAW_MATERIAL_SUPPLIER")
+    url = f"/api/quality/RAW_MATERIAL/{material['id']}/summary?stage=RAW_MATERIAL_SUPPLIER"
+    before = client.get(url, headers=stage_headers(client, "RAW_MATERIAL_SUPPLIER")).json()
+    assert before["eligible_for_approval"] is True
+    assert before["status"] == "PENDING"
+    assert before["approved_at"] is None
+    assert repository.get_raw_material(material["id"])["quality_status"] == "PENDING"
+
+    assert approve(client, "RAW_MATERIAL", material["id"], "RAW_MATERIAL_SUPPLIER").status_code == 200
+    after = client.get(url, headers=stage_headers(client, "RAW_MATERIAL_SUPPLIER")).json()
+    assert after["status"] == "APPROVED"
+    assert after["approved_at"]
+    assert repository.get_raw_material(material["id"])["quality_status"] == "APPROVED"
+
+
+def test_live_endpoint_reports_data_changes_but_ignores_logins(workflow):
+    client, *_ = workflow
+    assert client.get("/api/live").status_code == 401
+    headers = auth_headers(client, "supplier")
+    first = client.get("/api/live", headers=headers).json()
+    assert {"version", "blockchain_connected"} <= set(first)
+    auth_headers(client, "admin")
+    assert client.get("/api/live", headers=headers).json()["version"] == first["version"]
+    create_material(client)
+    assert client.get("/api/live", headers=headers).json()["version"] > first["version"]

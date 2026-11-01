@@ -240,3 +240,7 @@ __marimo__/
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Generated media (promo video, screenshots) and local tool config
+output/
+.claude/

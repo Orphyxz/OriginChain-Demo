@@ -57,14 +57,14 @@ async function main() {
   });
   await send("Runtime.enable"); await send("Page.enable"); await delay(1800);
   const evaluated = await send("Runtime.evaluate", { returnByValue: true, expression: `(() => {
-    const required = ["#access", "#loginForm", "#accountPanel", "#operationalApp", "#dashboard", "#overviewSummary", "#demoProgress", "#demoTools", "#demoAutofillButton", "#demoHoldButton", "#journey", "#materials", "#manufacturing", "#operations", "#consumer", "#materialForm", "#productForm", "#verifyForm", "#admin", "#readinessButton", "#tamperDialog", "#resetDialog", "#demoActionDialog"];
+    const required = ["#access", "#loginForm", "#accountPanel", "#operationalApp", "#overview", "#journey", "#batches", "#materials", "#manufacturing", "#quality", "#verify", "#materialForm", "#productForm", "#verifyForm", "#admin", "#fab", "#fabButton", "#demoAutofillButton", "#demoHoldButton", "#readinessButton", "#tamperDialog", "#resetDialog", "#demoActionDialog", "#evidenceDialog", "#themeToggle"];
     const missing = required.filter((selector) => !document.querySelector(selector));
     return { title: document.title, h1: document.querySelector("h1")?.textContent, missing,
       sections: document.querySelectorAll("main section").length,
       chain: document.querySelector("#chainPill")?.textContent.trim(),
       loginVisible: !document.querySelector("#access").classList.contains("hidden"),
       operationalHidden: document.querySelector("#operationalApp").hidden,
-      publicVerifyVisible: document.querySelector("#consumer").getClientRects().length > 0,
+      publicVerifyLinked: Boolean(document.querySelector('a[href="#verify"]')),
       horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth };
   })()` });
   const result = evaluated.result.value;
@@ -89,19 +89,20 @@ async function main() {
       await pause(1400);
       const stages = [...document.querySelectorAll(".stage-tabs button")]
         .filter((button) => !button.hidden).map((button) => button.dataset.stage);
+      const shown = (selector) => !document.querySelector(selector).classList.contains("hidden");
       const snapshot = {
         username,
         roleBadge: document.querySelector("#accountRole").textContent.trim(),
         loginHidden: document.querySelector("#access").classList.contains("hidden"),
         accountVisible: visible("#accountPanel"),
-        materialsVisible: visible("#materials"),
-        materialFormVisible: visible("#materialRegistrationPanel"),
-        manufacturingVisible: visible("#manufacturing"),
-        productFormVisible: visible("#productForm"),
-        adminVisible: visible("#admin"),
-        demoToolsVisible: visible("#demoTools"),
-        demoHoldVisible: visible("#demoHoldButton"),
-        readinessVisible: visible("#readinessButton"),
+        materialsVisible: shown("#materials"),
+        materialFormVisible: shown("#openMaterialForm"),
+        manufacturingVisible: shown("#manufacturing"),
+        productFormVisible: shown("#openProductForm") || (username === "manufacturer" && state.products.length > 0),
+        adminVisible: shown('#primaryNav a[data-view="admin"]'),
+        demoToolsVisible: shown("#fabStage"),
+        demoHoldVisible: shown("#demoHoldButton"),
+        readinessVisible: shown("#fabAdmin"),
         stages,
       };
       document.querySelector("#logoutButton").click();
@@ -110,15 +111,17 @@ async function main() {
         && document.querySelector("#operationalApp").hidden;
       return snapshot;
     };
-    document.querySelector('a[href="#consumer"]').click();
-    await pause(100);
+    document.querySelector('a[href="#verify"]').click();
+    await pause(150);
+    const verifyViewShown = !document.querySelector("#verify").classList.contains("hidden");
     document.querySelector("#verifyCode").value = "OC-LUX-SERUM-0001";
-    document.querySelector("#verifyForm button").click();
+    document.querySelector("#verifyForm button[type=submit]").click();
     await pause(900);
     const consumerText = document.querySelector("#consumerResult").textContent.replace(/\\s+/g, " ").trim();
     const publicVerification = {
       consumerResult: consumerText,
-      consumerHasQcControls: Boolean(document.querySelector("#consumerResult select, #consumerResult .check-row, #consumerResult .save-check")),
+      verifyViewShown,
+      consumerHasQcControls: Boolean(document.querySelector("#consumerResult select, #consumerResult .check-card, #consumerResult .result-toggle")),
       consumerLeaksWallet: /0x[a-fA-F0-9]{40}/.test(consumerText),
       consumerLeaksStorageName: consumerText.includes("stored_filename"),
     };
@@ -146,8 +149,8 @@ async function main() {
 
       await signIn("admin");
       document.querySelector("#readinessButton").click();
-      await until(() => document.querySelector("#readinessResult").textContent.includes("READY"), "readiness result");
-      const readiness = document.querySelector("#readinessResult").textContent.includes("READY");
+      await until(() => document.querySelector("#readinessResult").textContent.includes("Demo ready"), "readiness result");
+      const readiness = document.querySelector("#readinessResult").textContent.includes("Demo ready");
       await confirmDialog("#resetButton", "#confirmReset");
       await until(() => state.products.length === 0 && state.materials.length === 0, "fresh demo reset");
       await signOut();
@@ -184,7 +187,7 @@ async function main() {
 
       document.querySelector("#verifyCode").value = productCode;
       state.verification = null;
-      document.querySelector("#verifyForm button").click();
+      document.querySelector("#verifyForm button[type=submit]").click();
       await until(() => state.verification?.status === "GENUINE", "genuine consumer result");
       const genuine = state.verification.status;
 
@@ -193,7 +196,7 @@ async function main() {
       await until(() => state.verification?.status === "SUSPICIOUS", "tampered verification");
       await signOut();
       state.verification = null;
-      document.querySelector("#verifyForm button").click();
+      document.querySelector("#verifyForm button[type=submit]").click();
       await until(() => state.verification?.status === "SUSPICIOUS", "public suspicious result");
       fullDemoResult = {
         readiness,
@@ -252,7 +255,7 @@ async function main() {
   await delay(350);
   const mobile = await send("Runtime.evaluate", { returnByValue: true, expression: `({
     horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
-    journeyColumns: getComputedStyle(document.querySelector("#journey")).gridTemplateColumns,
+    fabVisible: document.querySelector("#fabButton").getBoundingClientRect().width > 0,
     actionWidth: document.querySelector("#verifyForm button")?.getBoundingClientRect().width,
   })` });
   const interactionResult = interaction.result.value;
@@ -271,8 +274,8 @@ async function main() {
     || !item.loggedOut || item.roleBadge.length === 0
     || JSON.stringify(item.stages) !== JSON.stringify(expectedStages[item.username]));
   const failed = result.missing.length || errors.length || result.horizontalOverflow
-    || !result.loginVisible || !result.operationalHidden || !result.publicVerifyVisible
-    || interactionResult.hash !== "#consumer" || mobileResult.horizontalOverflow
+    || !result.loginVisible || !result.operationalHidden || !result.publicVerifyLinked
+    || !publicVerification.verifyViewShown || interactionResult.hash !== "#signin" || mobileResult.horizontalOverflow
     || !reloadResult.restored || reloadResult.role !== "RAW_MATERIAL_SUPPLIER"
     || reloadResult.activeStage !== "RAW_MATERIAL_SUPPLIER" || !reloadResult.operationalVisible
     || roleFailure || !interactionResult.invalidTokenReturnedToLogin

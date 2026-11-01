@@ -576,7 +576,7 @@ class StageDemoAutomation(PresentationDemoSeeder):
                 SupplyChainStage.RETAILER,
                 already_complete=False,
                 action="DEMO_HOLD",
-                message="Security Seal and Luxury Pack Inspection is FAIL; Retail status is HOLD.",
+                message="Seal and packaging check failed; the product is on HOLD.",
             )
 
     def _supplier(self, user_id: str) -> dict[str, Any]:

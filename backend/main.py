@@ -450,6 +450,17 @@ def create_app(
     app.state.auth = auth
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+    @app.middleware("http")
+    async def revalidate_frontend(request: Request, call_next):
+        # Make browsers re-check the page and its assets so a UI update is never mixed with a stale stylesheet.
+        response = await call_next(request)
+        if request.url.path.startswith("/static/fonts/"):
+            # Font files never change, so browsers may keep them indefinitely.
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif request.url.path == "/" or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
@@ -461,6 +472,11 @@ def create_app(
     @app.get("/api/health")
     def health(request: Request) -> dict[str, Any]:
         return {"api_status": "ok", **request.app.state.blockchain.health()}
+
+    @app.get("/api/live")
+    def live(request: Request, _user: dict[str, Any] = Depends(authenticated_user)) -> dict[str, Any]:
+        # One lightweight poll for signed-in clients: a data-change version plus chain status.
+        return {"version": request.app.state.repository.change_version(), **request.app.state.blockchain.health()}
 
     @app.post("/api/auth/login")
     def login(payload: LoginRequest, request: Request) -> dict[str, Any]:
@@ -1081,6 +1097,10 @@ def create_app(
             else "Not accepted by the demo issuer/reference controls; issuer, trust, type, or report reference is missing or unsuitable."
         )
         data = await file.read(MAX_UPLOAD_BYTES + 1)
+        duplicate_message = (
+            "This exact file is already recorded for this product. "
+            "Upload the document that belongs to this check."
+        )
         try:
             stored_name, digest = request.app.state.evidence_store.save(
                 SupplyChainStage(result["supply_chain_stage"]), file.filename or "", file.content_type or "", data
@@ -1096,6 +1116,8 @@ def create_app(
                 )
             except Exception as exc:
                 request.app.state.evidence_store.delete(stored_name)
+                if "Evidence already registered" in str(exc):
+                    raise HTTPException(status_code=409, detail=duplicate_message) from exc
                 raise HTTPException(status_code=502, detail=f"Blockchain evidence commitment failed: {exc}") from exc
         evidence = repo.add_evidence(
             {
